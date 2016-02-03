@@ -236,7 +236,69 @@ def test_AddCompoundNode():
 
 
 def ConstructNetwork(comp_dict, rxn_dict):
-    # Code here
+    """Constructs a directed graph (network) from the compound and reaction
+    dictionaries produced by GetRawNetwork."""
+
+    def CheckConnection(minetwork, c_node, r_node):
+        """Checks that the compound-to-reaction node connection is valid."""
+        if c_node[1] not in minetwork.node[r_node]['c']:
+            msg_dict = {
+            'rf':'forward reactants',
+            'pf':'forward products',
+            'rr':'reverse reactants',
+            'pr':'reverse products'
+            }
+            set_name = msg_dict[r_node[0]]
+            node_set = ", ".join(minetwork.node[r_node]['c'])
+            message = "Warning: Compound %s is not found in the %s of reaction %s (%s). Connection not created." % (c_node[1], set_name, r_node[1], node_set)
+            sys.stderr.write(message)
+            return False
+        else:
+            return True
+
+    # Initialise directed graph
+    minetwork = nx.DiGraph()
+
+    # Add all compounds
+    for comp in comp_dict.values():
+        minetwork = AddCompoundNode(minetwork, comp)
+
+    # Add all reactions
+    for rxn in rxn_dict.values():
+        minetwork = AddQuadReactionNode(minetwork, rxn)
+
+    # Iterate over compounds, connecting them to the correct reaction nodes
+    for comp in comp_dict.values():
+        c_node = ('c', comp['_id']) # The compound node to connect
+        try:
+            # Connect to reactions in which the compound is a reactant
+            rxn_ids = comp['Reactant_in']
+            # Only connect reactions that are present in the network/dictionary
+            rxn_ids = set.intersection(set(rxn_dict.keys()), set(rxn_ids))
+            for rxn_id in rxn_ids:
+                rf_node = ('rf', rxn_id)
+                if CheckConnection(minetwork, c_node, rf_node):
+                    minetwork.add_edge(c_node, rf_node, weight=0) # Connect c -> forward reactants
+                pr_node = ('pr', rxn_id)
+                if CheckConnection(minetwork, c_node, pr_node):
+                    minetwork.add_edge(pr_node, c_node, weight=0) # Connect reverse products -> c
+        except KeyError:
+            pass
+        try:
+            # Connect to reactions in which the compound is a product
+            rxn_ids = comp['Product_of']
+            # Only connect reactions that are present in the network/dictionary
+            rxn_ids = set.intersection(set(rxn_dict.keys()), set(rxn_ids))
+            for rxn_id in rxn_ids:
+                pf_node = ('pf', rxn_id)
+                if CheckConnection(minetwork, c_node, pf_node):
+                    minetwork.add_edge(pf_node, c_node, weight=0) # Connect c -> forward products
+                rr_node = ('rr', rxn_id)
+                if CheckConnection(minetwork, c_node, rr_node):
+                    minetwork.add_edge(c_node, rr_node, weight=0) # Connect reverse reactants -> c
+        except KeyError:
+            pass
+
     return minetwork
 
 def test_ConstructNetwork():
@@ -247,8 +309,8 @@ def test_ConstructNetwork():
     comp_dict['C4'] = {'_id':'C4', 'Product_of':['R1e']}
     comp_dict['C5'] = {'_id':'C5', 'Reactant_in':['Rc3','R2f'], 'Product_of':['Rcd','R1e']}
     comp_dict['C6'] = {'_id':'C6', 'Product_of':['Rcd']}
-    comp_dict['C7'] = {'_id':'C7', 'Product_of':['R2f']}
-    comp_dict['C8'] = {'_id':'C8', 'Product_of':['R2f']}
+    comp_dict['C7'] = {'_id':'C7', 'Product_of':['R2f','R7f']} # Seeding with non-expanded reaction R7f
+    comp_dict['C8'] = {'_id':'C8', 'Reactant_in':['Rb7'], 'Product_of':['R2f']} # Seeding with non-expanded reaction Rb7
 
     rxn_dict = {}
     rxn_dict['R99'] = {'_id':'R99', 'Products':[[1,'C2'],[1,'C3']], 'Reactants':[[1,'C1']]}
@@ -259,8 +321,65 @@ def test_ConstructNetwork():
 
     G = nx.DiGraph()
 
+    for comp in comp_dict.values():
+        G = AddCompoundNode(G, comp)
 
-    assert ConstructNetwork({},{}) == G
+    for rxn in rxn_dict.values():
+        G = AddQuadReactionNode(G, rxn)
+
+    # C1 edges
+    c = ('c','C1')
+    G.add_edge(c, ('rf','R99'), weight=0)
+    G.add_edge(('pr','R99'), c, weight=0)
+
+    # C2 edges
+    c = ('c','C2')
+    G.add_edge(('pf','R99'), c, weight=0)
+    G.add_edge(c, ('rr','R99'), weight=0)
+    G.add_edge(c, ('rf','R1e'), weight=0)
+    G.add_edge(('pr','R1e'), c, weight=0)
+
+    # C3 edges
+    c = ('c','C3')
+    G.add_edge(('pf','R99'), c, weight=0)
+    G.add_edge(c, ('rr','R99'), weight=0)
+    G.add_edge(c, ('rr','Rc3'), weight=0)
+    G.add_edge(('pf','Rc3'), c, weight=0)
+    G.add_edge(c, ('rf','Rcd'), weight=0)
+    G.add_edge(('pr','Rcd'), c, weight=0)
+
+    # C4 edges
+    c = ('c','C4')
+    G.add_edge(('pf','R1e'), c, weight=0)
+    G.add_edge(c, ('rr','R1e'), weight=0)
+
+    # C5 edges
+    c = ('c','C5')
+    G.add_edge(('pf','R1e'), c, weight=0)
+    G.add_edge(c, ('rr','R1e'), weight=0)
+    G.add_edge(('pr','Rc3'), c, weight=0)
+    G.add_edge(c, ('rf','Rc3'), weight=0)
+    G.add_edge(('pf','Rcd'), c, weight=0)
+    G.add_edge(c, ('rr','Rcd'), weight=0)
+    G.add_edge(c, ('rf','R2f'), weight=0)
+    G.add_edge(('pr','R2f'), c, weight=0)
+
+    # C6 edges
+    c = ('c','C6')
+    G.add_edge(('pf','Rcd'), c, weight=0)
+    G.add_edge(c, ('rr','Rcd'), weight=0)
+
+    # C7 edges
+    c = ('c','C7')
+    G.add_edge(('pf','R2f'), c, weight=0)
+    G.add_edge(c, ('rr','R2f'), weight=0)
+
+    # C8 edges
+    c = ('c','C8')
+    G.add_edge(('pf','R2f'), c, weight=0)
+    G.add_edge(c, ('rr','R2f'), weight=0)
+
+    assert nx.is_isomorphic(ConstructNetwork(comp_dict,rxn_dict), G)
 
 
 # Main code block
