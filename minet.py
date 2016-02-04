@@ -250,7 +250,7 @@ def ConstructNetwork(comp_dict, rxn_dict):
             }
             set_name = msg_dict[r_node[0]]
             node_set = ", ".join(minetwork.node[r_node]['c'])
-            message = "Warning: Compound %s is not found in the %s of reaction %s (%s). Connection not created." % (c_node[1], set_name, r_node[1], node_set)
+            message = "Warning: Compound %s is not found in the %s of reaction %s (%s). Connection not created.\n" % (c_node[1], set_name, r_node[1], node_set)
             sys.stderr.write(message)
             return False
         else:
@@ -301,7 +301,7 @@ def ConstructNetwork(comp_dict, rxn_dict):
 
     return minetwork
 
-def test_ConstructNetwork():
+def test_ConstructNetwork(capsys):
     comp_dict = {}
     comp_dict['C1'] = {'_id':'C1', 'Reactant_in':['R99']}
     comp_dict['C2'] = {'_id':'C2', 'Reactant_in':['R1e'], 'Product_of':['R99']}
@@ -363,13 +363,13 @@ def test_ConstructNetwork():
     G.add_edge(c, ('rr','Rcd'), weight=0)
     G.add_edge(c, ('rf','R2f'), weight=0)
     G.add_edge(('pr','R2f'), c, weight=0)
+    # C7 edges
 
     # C6 edges
     c = ('c','C6')
     G.add_edge(('pf','Rcd'), c, weight=0)
     G.add_edge(c, ('rr','Rcd'), weight=0)
 
-    # C7 edges
     c = ('c','C7')
     G.add_edge(('pf','R2f'), c, weight=0)
     G.add_edge(c, ('rr','R2f'), weight=0)
@@ -381,10 +381,19 @@ def test_ConstructNetwork():
 
     assert nx.is_isomorphic(ConstructNetwork(comp_dict,rxn_dict), G)
 
+    # Test output of CheckConnection
+    comp_dict = {'c':{'_id':'c', 'Reactant_in':['r']}}
+    rxn_dict = {'r':{'_id':'r', 'Products':[[1,'a'],[1,'b']], 'Reactants':[[1,'z']]}}
+    ConstructNetwork(comp_dict, rxn_dict)
+    out, err = capsys.readouterr()
+    assert err == """Warning: Compound c is not found in the forward reactants of reaction r (z). Connection not created.\nWarning: Compound c is not found in the reverse products of reaction r (z). Connection not created.\n"""
+
 
 # Main code block
-def main():
-    # Code here
+def main(infile_name, step_limit, comp_limit, outfile_name):
+    start_comp_ids = list(set(KeggToMineId(ReadCompounds(infile_name)).values()))
+    minetwork = ConstructNetwork(*GetRawNetwork(start_comp_ids, step_limit, comp_limit))
+    
     pass
 
 def test_main():
