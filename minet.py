@@ -5,15 +5,20 @@ import networkx as nx
 import MineClient3 as mc
 import re
 import sys
+import argparse
+import pickle
 
 # Define functions
 def ReadCompounds(filename):
     """Read a file with KEGG compound IDs."""
+    sys.stdout.write("Reading compound ID file...")
+    sys.stdout.flush()
     compounds = [line.rstrip() for line in open(filename, 'r')]
     for c in compounds:
         if re.fullmatch("^C[0-9]{5}$", c) == None:
             msg = "Warning: The supplied string '", c, "' is not a valid KEGG compound ID."
             sys.exit(msg)
+    print(" Done.")
     return compounds
 
 def test_ReadCompounds():
@@ -40,6 +45,8 @@ def test_ReadCompounds():
 
 def KeggToMineId(kegg_ids):
     """Translate KEGG IDs to MINE IDs."""
+    sys.stdout.write("Translating from KEGG IDs to MINE IDs...")
+    sys.stdout.flush()
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     kegg_id_dict = {}
@@ -48,6 +55,7 @@ def KeggToMineId(kegg_ids):
             kegg_id_dict[kegg_id] = con.quick_search("KEGGexp2", kegg_id)[0]['_id']
         except:
             continue
+    print(" Done.")
     return kegg_id_dict
 
 def test_KeggToMineId():
@@ -61,6 +69,9 @@ def test_KeggToMineId():
 
 def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
     """Download connected reactions and compounds up to the limits."""
+
+    sys.stdout.write("Downloading raw network data...")
+    sys.stdout.flush()
 
     # Set up connection
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
@@ -88,7 +99,6 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
         steps += 1
         unextended_comp_ids = set(comp_dict.keys()) - extended_comp_ids
         for comp_id in unextended_comp_ids:
-            print(comp_id)
             comp = comp_dict[comp_id] # New compounds are always in the dictionary
             rxn_id_list = []
             try:
@@ -100,7 +110,6 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
             except KeyError:
                 pass
             for rxn_id in rxn_id_list:
-                print(rxn_id)
                 # Only download new reactions
                 try:
                     rxn = rxn_dict[rxn_id]
@@ -116,8 +125,8 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
                         rxn_comp = con.get_comps(db, [rxn_comp_id])[0]
                         comp_dict[rxn_comp_id] = rxn_comp # Add new compound
                         comps += 1
-                        print(rxn_comp_id)
             extended_comp_ids.add(comp_id)
+    print(" Done.")
     return (comp_dict, rxn_dict)
 
 def test_GetRawNetwork():
@@ -235,9 +244,14 @@ def test_AddCompoundNode():
     assert nx.is_isomorphic(AddCompoundNode(AddCompoundNode(G1, comp1), comp2), G2)
 
 
-def ConstructNetwork(comp_dict, rxn_dict):
+def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
     """Constructs a directed graph (network) from the compound and reaction
     dictionaries produced by GetRawNetwork."""
+
+    sys.stdout.write("Constructing network...")
+    sys.stdout.flush()
+
+    start_comp_ids = set(start_comp_ids)
 
     def CheckConnection(minetwork, c_node, r_node):
         """Checks that the compound-to-reaction node connection is valid."""
@@ -262,6 +276,11 @@ def ConstructNetwork(comp_dict, rxn_dict):
     # Add all compounds
     for comp in comp_dict.values():
         minetwork = AddCompoundNode(minetwork, comp)
+        # Add an attribute to the compound specifying whether it is a starting compound
+        if comp['_id'] in start_comp_ids:
+            minetwork.node[('c',comp['_id'])]['start'] = True
+        else:
+            minetwork.node[('c',comp['_id'])]['start'] = False
 
     # Add all reactions
     for rxn in rxn_dict.values():
@@ -298,7 +317,7 @@ def ConstructNetwork(comp_dict, rxn_dict):
                     minetwork.add_edge(c_node, rr_node, weight=0) # Connect reverse reactants -> c
         except KeyError:
             pass
-
+    print(" Done.")
     return minetwork
 
 def test_ConstructNetwork(capsys):
@@ -326,6 +345,11 @@ def test_ConstructNetwork(capsys):
 
     for rxn in rxn_dict.values():
         G = AddQuadReactionNode(G, rxn)
+
+    for node in G.nodes():
+        if node[0] == 'c':
+            G.node[node]['start'] = False
+    G.node[('c','C1')]['start'] = True # C1 is the starting compound
 
     # C1 edges
     c = ('c','C1')
@@ -379,25 +403,40 @@ def test_ConstructNetwork(capsys):
     G.add_edge(('pf','R2f'), c, weight=0)
     G.add_edge(c, ('rr','R2f'), weight=0)
 
-    assert nx.is_isomorphic(ConstructNetwork(comp_dict,rxn_dict), G)
+    assert nx.is_isomorphic(ConstructNetwork(comp_dict,rxn_dict,['C1']), G)
+
+    # Test contents node by node
+    t = True
+    for node in ConstructNetwork(comp_dict,rxn_dict,['C1']).nodes(data=True):
+        if G.node[node[0]] != node[1]:
+            t = False
+            break
+    assert t
 
     # Test output of CheckConnection
     comp_dict = {'c':{'_id':'c', 'Reactant_in':['r']}}
     rxn_dict = {'r':{'_id':'r', 'Products':[[1,'a'],[1,'b']], 'Reactants':[[1,'z']]}}
-    ConstructNetwork(comp_dict, rxn_dict)
+    ConstructNetwork(comp_dict, rxn_dict, ['C1'])
     out, err = capsys.readouterr()
     assert err == """Warning: Compound c is not found in the forward reactants of reaction r (z). Connection not created.\nWarning: Compound c is not found in the reverse products of reaction r (z). Connection not created.\n"""
 
 
 # Main code block
 def main(infile_name, step_limit, comp_limit, outfile_name):
-    start_comp_ids = list(set(KeggToMineId(ReadCompounds(infile_name)).values()))
-    minetwork = ConstructNetwork(*GetRawNetwork(start_comp_ids, step_limit, comp_limit))
-    
-    pass
+    # Get starting compound MINE IDs
+    start_ids = list(set(KeggToMineId(ReadCompounds(infile_name)).values()))
+    # Create the network
+    minetwork = ConstructNetwork(*GetRawNetwork(start_ids, step_limit, comp_limit), start_ids)
+    # Save to Pickle
+    pickle.dump(minetwork, open(outfile_name, 'wb'))
 
-def test_main():
-    assert main() == ""
 
 if __name__ == "__main__":
-    main(options)
+    # Read arguments from the commandline
+    parser = argparse.ArgumentParser()
+    parser.add_argument('infile', help='Read KEGG compound identifiers from text file.')
+    parser.add_argument('outfile', help='Write MINE network to Python Pickle file.')
+    parser.add_argument('-r', type=int, default=10, help='Maximum number of reaction steps to download.')
+    parser.add_argument('-c', type=int, default=100000, help='Maximum number of compounds to download.')
+    args = parser.parse_args()
+    main(args.infile, args.r, args.c, args.outfile)
