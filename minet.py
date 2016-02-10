@@ -70,7 +70,7 @@ def test_KeggToMineId():
 def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
     """Download connected reactions and compounds up to the limits."""
 
-    sys.stdout.write("Downloading raw network data...")
+    sys.stdout.write("Downloading raw network data...\n")
     sys.stdout.flush()
 
     # Set up connection
@@ -97,6 +97,8 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
     # Perform stepwise expansion of downloaded data
     while steps < step_limit and comps < comp_limit:
         steps += 1
+        sys.stdout.write("\rStep %s: Compound %s..." % (str(steps), str(comps)))
+        sys.stdout.flush()
         unextended_comp_ids = set(comp_dict.keys()) - extended_comp_ids
         for comp_id in unextended_comp_ids:
             comp = comp_dict[comp_id] # New compounds are always in the dictionary
@@ -125,6 +127,8 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
                         rxn_comp = con.get_comps(db, [rxn_comp_id])[0]
                         comp_dict[rxn_comp_id] = rxn_comp # Add new compound
                         comps += 1
+                        sys.stdout.write("\rStep %s: Compound %s..." % (str(steps), str(comps)))
+                        sys.stdout.flush()
             extended_comp_ids.add(comp_id)
     print(" Done.")
     return (comp_dict, rxn_dict)
