@@ -111,24 +111,27 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
                 rxn_id_list.extend(comp['Product_of'])
             except KeyError:
                 pass
-            for rxn_id in rxn_id_list:
-                # Only download new reactions
-                try:
-                    rxn = rxn_dict[rxn_id]
-                except KeyError:
-                    rxn = con.get_rxns(db, [rxn_id])[0]
-                    rxn_dict[rxn_id] = rxn # Add new reaction
-                rxn_comp_ids = [x[1] for x in rxn['Products']] + [x[1] for x in rxn['Reactants']]
-                for rxn_comp_id in rxn_comp_ids:
-                    # Only download new compounds
+            # Some compounds do not list their reactions;
+            # Only go through the reaction list if it is non-empty
+            if rxn_id_list != []:
+                for rxn_id in rxn_id_list:
+                    # Only download new reactions
                     try:
-                        rxn_comp = comp_dict[rxn_comp_id]
+                        rxn = rxn_dict[rxn_id]
                     except KeyError:
-                        rxn_comp = con.get_comps(db, [rxn_comp_id])[0]
-                        comp_dict[rxn_comp_id] = rxn_comp # Add new compound
-                        comps += 1
-                        sys.stdout.write("\rStep %s: Compound %s..." % (str(steps), str(comps)))
-                        sys.stdout.flush()
+                        rxn = con.get_rxns(db, [rxn_id])[0]
+                        rxn_dict[rxn_id] = rxn # Add new reaction
+                    rxn_comp_ids = [x[1] for x in rxn['Products']] + [x[1] for x in rxn['Reactants']]
+                    for rxn_comp_id in rxn_comp_ids:
+                        # Only download new compounds
+                        try:
+                            rxn_comp = comp_dict[rxn_comp_id]
+                        except KeyError:
+                            rxn_comp = con.get_comps(db, [rxn_comp_id])[0]
+                            comp_dict[rxn_comp_id] = rxn_comp # Add new compound
+                            comps += 1
+                            sys.stdout.write("\rStep %s: Compound %s..." % (str(steps), str(comps)))
+                            sys.stdout.flush()
             extended_comp_ids.add(comp_id)
     print(" Done.")
     return (comp_dict, rxn_dict)
@@ -169,6 +172,12 @@ def test_GetRawNetwork():
     compound_ids = ['Cefbaa83ea06e7c31820f93c1a5535e1378aba42b','C38a97a9f962a32b984b1702e07a25413299569ab']
 
     assert GetRawNetwork(compound_ids, step_limit=2) == (comp_dict, rxn_dict)
+
+    # NAD+ should not be connected via reactions
+    nad_plus = 'Xf5dc8599a48d0111a3a5f618296752e1b53c8d30'
+    nad_comp = con.get_comps(db, [nad_plus])[0]
+
+    assert GetRawNetwork([nad_plus]) == ({nad_plus : nad_comp}, {})
 
 
 def AddQuadReactionNode(graph, rxn):
