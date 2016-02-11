@@ -7,8 +7,129 @@ import re
 import sys
 import argparse
 import pickle
+import time
 
 # Define functions
+def QuickSearch(con, db, query):
+    """Wrapper for MineClient3 quick_search() with reconnect functionality."""
+    n = 0
+    results = []
+    while True:
+        try:
+            results = con.quick_search(db, query)
+            return results
+        except mc.ServerError:
+            return results
+        except:
+            # Server not responding, try again
+            n += 1
+            if n % 5 == 0:
+                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), query)
+                sys.stderr.write(message)
+                sys.stderr.flush()
+            if n >= 36:
+                message = "Warning: Connection attempt limit reached. Returning empty list.\n"
+                sys.stderr.write(message)
+                sys.stderr.flush()
+                return results
+            if n <= 12:
+                time.sleep(10)
+            if n > 12:
+                time.sleep(30)
+
+def test_QuickSearch():
+
+    # Set up connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    assert QuickSearch(con, db, 'C00022')[0]['Names'][0] == 'Pyruvate'
+    assert QuickSearch(con, db, 'random_query') == []
+
+
+def GetComps(con, db, comp_id_list):
+    """Wrapper for MineClient3 get_comps() with reconnect functionality."""
+    n = 0
+    results = []
+    while True:
+        try:
+            results = con.get_comps(db, comp_id_list)
+            return results
+        except mc.ServerError:
+            return results
+        except:
+            # Server not responding, try again
+            n += 1
+            if n % 5 == 0:
+                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), str(comp_id_list))
+                sys.stderr.write(message)
+                sys.stderr.flush()
+            if n >= 36:
+                message = "Warning: Connection attempt limit reached. Returning empty list.\n"
+                sys.stderr.write(message)
+                sys.stderr.flush()
+                return results
+            if n <= 12:
+                time.sleep(10)
+            if n > 12:
+                time.sleep(30)
+
+def test_GetComps():
+    # Set up connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    assert GetComps(con, db, ['Cc93137cc81324a5b2872b0bf1c77866c234d66e1'])[0]['Formula'] == 'C7H15O10P'
+    assert GetComps(con, db, ['Cc93137cc81324a5b2872b0bf1c77866c234d66e1'])[0]['dG_error'] == 1.02079
+    assert GetComps(con, db, ['not_a_comp_id']) == [None]
+
+
+def GetRxns(con, db, rxn_id_list):
+    """Wrapper for MineClient3 get_rxns() with reconnect functionality."""
+    n = 0
+    results = []
+    while True:
+        try:
+            results = con.get_rxns(db, rxn_id_list)
+            return results
+        except mc.ServerError:
+            return results
+        except:
+            # Server not responding, try again
+            n += 1
+            if n % 5 == 0:
+                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), rxn_id_list)
+                sys.stderr.write(message)
+                sys.stderr.flush()
+            if n >= 36:
+                message = "Warning: Connection attempt limit reached. Returning empty list.\n"
+                sys.stderr.write(message)
+                sys.stderr.flush()
+                return results
+            if n <= 12:
+                time.sleep(10)
+            if n > 12:
+                time.sleep(30)
+
+def test_GetRxns():
+
+    # Set up connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    rxn_id = 'Re598257045ae3ce45dabf450b57708d84e642558'
+    rxn_op = '1.14.13.e'
+    rxn_rlen = 4
+
+    assert len(GetRxns(con, db, [rxn_id])) == 1
+    assert GetRxns(con, db, [rxn_id])[0]['Operators'] == [rxn_op]
+    assert len(GetRxns(con, db, [rxn_id])[0]['Reactants']) == 4
+    assert GetRxns(con, db, ['random_reaction']) == [None]
+
+
 def ReadCompounds(filename):
     """Read a file with KEGG compound IDs."""
     sys.stdout.write("Reading compound ID file...")
@@ -49,11 +170,14 @@ def KeggToMineId(kegg_ids):
     sys.stdout.flush()
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
     kegg_id_dict = {}
     for kegg_id in kegg_ids:
         try:
-            kegg_id_dict[kegg_id] = con.quick_search("KEGGexp2", kegg_id)[0]['_id']
-        except:
+            kegg_id_dict[kegg_id] = QuickSearch(con, db, kegg_id)[0]['_id']
+        except IndexError:
+            sys.stderr.write("Warning: '%s' is not present in the database.\n" % kegg_id)
+            sys.stderr.flush()
             continue
     print(" Done.")
     return kegg_id_dict
@@ -89,8 +213,12 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
     # First add the starting compounds
     for comp_id in comp_id_list:
         comps += 1
-        comp = con.get_comps(db, [comp_id])[0]
-        comp_dict[comp_id] = comp # Add compound to dict
+        try:
+            comp = GetComps(con, db, [comp_id])[0]
+            comp_dict[comp_id] = comp # Add compound to dict
+        except IndexError:
+            sys.stderr.write("Warning: '%s' could not be retrieved from the database.\n" % comp_id)
+            sys.stderr.flush()
 
     extended_comp_ids = set()
 
@@ -111,27 +239,38 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
                 rxn_id_list.extend(comp['Product_of'])
             except KeyError:
                 pass
-            # Some compounds do not list their reactions;
-            # Only go through the reaction list if it is non-empty
-            if rxn_id_list != []:
-                for rxn_id in rxn_id_list:
-                    # Only download new reactions
+            for rxn_id in rxn_id_list:
+                # Only download new reactions
+                try:
+                    rxn = rxn_dict[rxn_id]
+                except KeyError:
                     try:
-                        rxn = rxn_dict[rxn_id]
+                        rxn = GetRxns(con, db, [rxn_id])[0]
+                        if rxn != None:
+                            rxn_dict[rxn_id] = rxn # Add new reaction
+                        else:
+                            sys.stderr.write("Warning: '%s' appears to have no record in the database.\n" % rxn_id)
+                            sys.stderr.flush()
+                            continue
+                    except IndexError:
+                        sys.stderr.write("Warning: '%s' could not be retrieved from the database.\n" % rxn_id)
+                        sys.stderr.flush()
+                        continue
+                rxn_comp_ids = [x[1] for x in rxn['Products']] + [x[1] for x in rxn['Reactants']]
+                for rxn_comp_id in rxn_comp_ids:
+                    # Only download new compounds
+                    try:
+                        rxn_comp = comp_dict[rxn_comp_id]
                     except KeyError:
-                        rxn = con.get_rxns(db, [rxn_id])[0]
-                        rxn_dict[rxn_id] = rxn # Add new reaction
-                    rxn_comp_ids = [x[1] for x in rxn['Products']] + [x[1] for x in rxn['Reactants']]
-                    for rxn_comp_id in rxn_comp_ids:
-                        # Only download new compounds
                         try:
-                            rxn_comp = comp_dict[rxn_comp_id]
-                        except KeyError:
-                            rxn_comp = con.get_comps(db, [rxn_comp_id])[0]
+                            rxn_comp = GetComps(con, db, [rxn_comp_id])[0]
                             comp_dict[rxn_comp_id] = rxn_comp # Add new compound
                             comps += 1
-                            sys.stdout.write("\rStep %s: Compound %s..." % (str(steps), str(comps)))
+                            sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), rxn_comp_id))
                             sys.stdout.flush()
+                        except IndexError:
+                            sys.stderr.write("Warning: '%s' in '%s' could not be retrieved from the database.\n" % (rxn_comp_id, rxn_id))
+                            sys.stderr.flush()
             extended_comp_ids.add(comp_id)
     print(" Done.")
     return (comp_dict, rxn_dict)
@@ -277,7 +416,7 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
             }
             set_name = msg_dict[r_node[0]]
             node_set = ", ".join(minetwork.node[r_node]['c'])
-            message = "Warning: Compound %s is not found in the %s of reaction %s (%s). Connection not created.\n" % (c_node[1], set_name, r_node[1], node_set)
+            message = "Warning: Compound '%s' is not found in the %s of reaction '%s' ('%s'). Connection not created.\n" % (c_node[1], set_name, r_node[1], node_set)
             sys.stderr.write(message)
             return False
         else:
@@ -431,7 +570,7 @@ def test_ConstructNetwork(capsys):
     rxn_dict = {'r':{'_id':'r', 'Products':[[1,'a'],[1,'b']], 'Reactants':[[1,'z']]}}
     ConstructNetwork(comp_dict, rxn_dict, ['C1'])
     out, err = capsys.readouterr()
-    assert err == """Warning: Compound c is not found in the forward reactants of reaction r (z). Connection not created.\nWarning: Compound c is not found in the reverse products of reaction r (z). Connection not created.\n"""
+    assert err == """Warning: Compound 'c' is not found in the forward reactants of reaction 'r' ('z'). Connection not created.\nWarning: Compound 'c' is not found in the reverse products of reaction 'r' ('z'). Connection not created.\n"""
 
 
 # Main code block
