@@ -400,18 +400,33 @@ def AddQuadReactionNode(graph, rxn):
     represents a group of compounds on one side of the reaction equation.
     """
 
-    reactants_f = set([x[1] for x in rxn['Reactants']])
-    products_f = set([x[1] for x in rxn['Products']])
-    reactants_r = products_f
-    products_r = reactants_f
+    rxn_malformed = False
 
-    graph.add_node(('rf', rxn['_id']), data=rxn, c=reactants_f)
-    graph.add_node(('pf', rxn['_id']), data=rxn, c=products_f)
-    graph.add_edge(('rf', rxn['_id']), ('pf', rxn['_id']), weight=1)
+    try:
+        rxn_id = rxn['_id']
+    except:
+        rxn_malformed = True
 
-    graph.add_node(('rr', rxn['_id']), data=rxn, c=reactants_r)
-    graph.add_node(('pr', rxn['_id']), data=rxn, c=products_r)
-    graph.add_edge(('rr', rxn['_id']), ('pr', rxn['_id']), weight=1)
+    try:
+        reactants_f = set([x[1] for x in rxn['Reactants']])
+        products_f = set([x[1] for x in rxn['Products']])
+        reactants_r = products_f
+        products_r = reactants_f
+    except:
+        rxn_malformed = True
+
+    if rxn_malformed:
+        sys.stderr.write("Warning: Reaction '%s' is malformed and will not be added to the network.\n" % str(rxn))
+        sys.stderr.flush()
+        return graph
+
+    graph.add_node(('rf', rxn_id), data=rxn, c=reactants_f)
+    graph.add_node(('pf', rxn_id), data=rxn, c=products_f)
+    graph.add_edge(('rf', rxn_id), ('pf', rxn_id), weight=1)
+
+    graph.add_node(('rr', rxn_id), data=rxn, c=reactants_r)
+    graph.add_node(('pr', rxn_id), data=rxn, c=products_r)
+    graph.add_edge(('rr', rxn_id), ('pr', rxn_id), weight=1)
 
     return graph
 
@@ -447,7 +462,12 @@ def test_AddQuadReactionNode():
 def AddCompoundNode(graph, compound):
     """Adds a compound node to the graph."""
     node_data = compound
-    node = ('c', compound['_id'])
+    try:
+        node = ('c', compound['_id'])
+    except:
+        sys.stderr.write("Warning: Compound '%s' is malformed and will not be added to the network.\n" % str(compound))
+        sys.stderr.flush()
+        return graph
     graph.add_node(node, data=node_data)
     return graph
 
@@ -500,10 +520,14 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
     for comp in comp_dict.values():
         minetwork = AddCompoundNode(minetwork, comp)
         # Add an attribute to the compound specifying whether it is a starting compound
-        if comp['_id'] in start_comp_ids:
-            minetwork.node[('c',comp['_id'])]['start'] = True
+        try:
+            comp_id = comp['_id']
+        except:
+            continue
+        if comp_id in start_comp_ids:
+            minetwork.node[('c',comp_id)]['start'] = True
         else:
-            minetwork.node[('c',comp['_id'])]['start'] = False
+            minetwork.node[('c',comp_id)]['start'] = False
 
     # Add all reactions
     for rxn in rxn_dict.values():
@@ -511,7 +535,11 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
 
     # Iterate over compounds, connecting them to the correct reaction nodes
     for comp in comp_dict.values():
-        c_node = ('c', comp['_id']) # The compound node to connect
+        try:
+            comp_id = comp['_id']
+        except:
+            continue
+        c_node = ('c', comp_id) # The compound node to connect
         try:
             # Connect to reactions in which the compound is a reactant
             rxn_ids = comp['Reactant_in']
