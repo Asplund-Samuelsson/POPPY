@@ -132,14 +132,14 @@ def test_GetRxns():
 
 def ReadCompounds(filename):
     """Read a file with KEGG compound IDs."""
-    sys.stdout.write("Reading compound ID file...")
+    sys.stdout.write("\nReading compound ID file...\n")
     sys.stdout.flush()
     compounds = [line.rstrip() for line in open(filename, 'r')]
     for c in compounds:
         if re.fullmatch("^C[0-9]{5}$", c) == None:
             msg = "Warning: The supplied string '", c, "' is not a valid KEGG compound ID."
             sys.exit(msg)
-    print(" Done.")
+    print("Done.")
     return compounds
 
 def test_ReadCompounds():
@@ -166,7 +166,7 @@ def test_ReadCompounds():
 
 def KeggToMineId(kegg_ids):
     """Translate KEGG IDs to MINE IDs."""
-    sys.stdout.write("Translating from KEGG IDs to MINE IDs...")
+    sys.stdout.write("\nTranslating from KEGG IDs to MINE IDs...\n")
     sys.stdout.flush()
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
@@ -179,7 +179,7 @@ def KeggToMineId(kegg_ids):
             sys.stderr.write("Warning: '%s' is not present in the database.\n" % kegg_id)
             sys.stderr.flush()
             continue
-    print(" Done.")
+    print("Done.")
     return kegg_id_dict
 
 def test_KeggToMineId():
@@ -191,10 +191,72 @@ def test_KeggToMineId():
     'C00130':'Cae5be0a0a2bb6b6baef29e4d4c6b3f4c1a67ad19'}
 
 
+def ExtractReactionCompIds(rxn):
+    """Extracts all compound IDs (reactants and products) from a MINE reaction object."""
+
+    rxn_comp_ids = []
+
+    # Get reaction ID and test if the reaction is valid
+    try:
+        rxn_id = rxn['_id']
+    except KeyError:
+        sys.stderr.write("Warning: '%s' does not have a reaction ID.\n" % str(rxn))
+        sys.stderr.flush()
+        rxn_id = 'UnknownReaction'
+    except TypeError:
+        sys.stderr.write("Warning: '%s' is not a valid reaction.\n" % str(rxn))
+        sys.stderr.flush()
+        return rxn_comp_ids
+
+    # Try to get the reactants
+    try:
+        rxn_p = rxn['Reactants']
+        try:
+            rxn_comp_ids.extend([x[1] for x in rxn_p])
+        except IndexError:
+            sys.stderr.write("Warning: The reactant list of '%s' is not valid.\n" % rxn_id)
+            sys.stderr.flush()
+    except KeyError:
+        sys.stderr.write("Warning: '%s' does not list its reactants.\n" % rxn_id)
+        sys.stderr.flush()
+
+    # Try to get the products
+    try:
+        rxn_p = rxn['Products']
+        try:
+            rxn_comp_ids.extend([x[1] for x in rxn_p])
+        except IndexError:
+            sys.stderr.write("Warning: The product list of '%s' is not valid.\n" % rxn_id)
+            sys.stderr.flush()
+    except KeyError:
+        sys.stderr.write("Warning: '%s' does not list its products.\n" % rxn_id)
+        sys.stderr.flush()
+
+    return rxn_comp_ids
+
+def test_ExtractReactionCompIds(capsys):
+    # Set up connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    rxn1 = {'_id':'R1','Products':[[1,'C1'],[1,'C2']],'Reactants':[[1,'X1'],[1,'X2']]}
+    rxn2_id = 'Re598257045ae3ce45dabf450b57708d84e642558'
+    rxn2 = con.get_rxns(db, [rxn2_id])[0]
+    rxn3 = {'_id':'R3','Reactants':[['XZ']]}
+
+    assert set(ExtractReactionCompIds(rxn1)) == set(['C1', 'C2', 'X1', 'X2'])
+    assert set(ExtractReactionCompIds(rxn2)) == set([x[1] for x in rxn2['Products']] + [x[1] for x in rxn2['Reactants']])
+
+    ExtractReactionCompIds(rxn3)
+    out, err = capsys.readouterr()
+    assert err == "Warning: The reactant list of 'R3' is not valid.\nWarning: 'R3' does not list its products.\n"
+
+
 def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
     """Download connected reactions and compounds up to the limits."""
 
-    sys.stdout.write("Downloading raw network data...\n")
+    sys.stdout.write("\nDownloading raw network data...\n")
     sys.stdout.flush()
 
     # Set up connection
@@ -213,6 +275,8 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
     # First add the starting compounds
     for comp_id in comp_id_list:
         comps += 1
+        sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), comp_id))
+        sys.stdout.flush()
         try:
             comp = GetComps(con, db, [comp_id])[0]
             comp_dict[comp_id] = comp # Add compound to dict
@@ -223,10 +287,9 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
     extended_comp_ids = set()
 
     # Perform stepwise expansion of downloaded data
-    while steps < step_limit and comps < comp_limit:
+    while steps < step_limit:
         steps += 1
-        sys.stdout.write("\rStep %s: Compound %s..." % (str(steps), str(comps)))
-        sys.stdout.flush()
+        print("")
         unextended_comp_ids = set(comp_dict.keys()) - extended_comp_ids
         for comp_id in unextended_comp_ids:
             comp = comp_dict[comp_id] # New compounds are always in the dictionary
@@ -256,7 +319,7 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
                         sys.stderr.write("Warning: '%s' could not be retrieved from the database.\n" % rxn_id)
                         sys.stderr.flush()
                         continue
-                rxn_comp_ids = [x[1] for x in rxn['Products']] + [x[1] for x in rxn['Reactants']]
+                rxn_comp_ids = ExtractReactionCompIds(rxn)
                 for rxn_comp_id in rxn_comp_ids:
                     # Only download new compounds
                     try:
@@ -264,15 +327,23 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
                     except KeyError:
                         try:
                             rxn_comp = GetComps(con, db, [rxn_comp_id])[0]
-                            comp_dict[rxn_comp_id] = rxn_comp # Add new compound
-                            comps += 1
-                            sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), rxn_comp_id))
-                            sys.stdout.flush()
+                            if rxn_comp != None:
+                                comp_dict[rxn_comp_id] = rxn_comp # Add new compound
+                                comps += 1
+                                sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), rxn_comp_id))
+                                sys.stdout.flush()
+                            else:
+                                sys.stderr.write("Warning: '%s' in '%s' appears to have no record in the database.\n" % (rxn_comp_id, rxn_id))
+                                sys.stderr.flush()
+                            # Break here if comp_limit is reached
+                            if comps >= comp_limit:
+                                print("Done.")
+                                return (comp_dict, rxn_dict)
                         except IndexError:
-                            sys.stderr.write("Warning: '%s' in '%s' could not be retrieved from the database.\n" % (rxn_comp_id, rxn_id))
+                            sys.stderr.write("Warning: '%s' in '%s' could not be retrieved from the database.\n" % (rxn_id, rxn_id))
                             sys.stderr.flush()
             extended_comp_ids.add(comp_id)
-    print(" Done.")
+    print("Done.")
     return (comp_dict, rxn_dict)
 
 def test_GetRawNetwork():
@@ -400,7 +471,7 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
     """Constructs a directed graph (network) from the compound and reaction
     dictionaries produced by GetRawNetwork."""
 
-    sys.stdout.write("Constructing network...")
+    sys.stdout.write("\nConstructing network...\n")
     sys.stdout.flush()
 
     start_comp_ids = set(start_comp_ids)
@@ -469,7 +540,7 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
                     minetwork.add_edge(c_node, rr_node, weight=0) # Connect reverse reactants -> c
         except KeyError:
             pass
-    print(" Done.")
+    print("Done.")
     return minetwork
 
 def test_ConstructNetwork(capsys):
