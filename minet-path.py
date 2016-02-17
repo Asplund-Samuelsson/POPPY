@@ -34,7 +34,36 @@ def TrimNetwork(network):
     """Trims the fat off a network in order to improve multiprocessing memory usage."""
     for node in network.nodes():
         del network.node[node]['data']
-    return network
+
+def test_TrimNetwork():
+    # Set up testing networks
+    G = nx.DiGraph()
+    Y = nx.DiGraph()
+    p1 = [1,2,3]
+    p2 = [1,5,6]
+    p3 = [5,7,4,2]
+    for p in [p1,p2,p3]:
+        G.add_path(p)
+        Y.add_path(p)
+    for n in G.nodes():
+        G.node[n]['data'] = ['dummy']
+        Y.node[n]['data'] = ['dummy']
+
+    # Trim G but not Y
+    TrimNetwork(G)
+
+    # Topography should be the same
+    assert nx.is_isomorphic(G, Y)
+
+    # Data should be gone from G
+    try:
+        x = [G.node[n]['data'] for n in G.nodes()]
+        d = True
+    except KeyError:
+        d = False
+
+    assert d == False
+
 
 
 def DetectLoops(path):
@@ -163,7 +192,7 @@ def test_CheckDependence():
     G.node[('c','C1')]['start'] = True
 
     assert set(CheckDependence(p1, G)) == set(['C5'])
-    assert set(CheckDependence(p2, G)) == set(['C2'])
+    assert set(CheckDependence(p2, G)) == set([])
     assert set(CheckDependence(p3, G)) == set([])
     assert set(CheckDependence(p3[0:3] + p5, G)) == set([])
 
@@ -245,11 +274,23 @@ def test_EnumeratePaths():
 
 
 def GetDirectIndependentPaths(network, start_id, target_id, reaction_limit):
-    """Lists all paths that directly connects the starting compound to a target."""
+    """Lists all paths that directly connect the starting compound to a target."""
     path_graphs = []
+    rejected = '!'
     for path in FindPaths(network, start_id, target_id, reaction_limit):
         if len(CheckDependence(path, network)) == 0:
             path_graphs.append(nx.subgraph(network, path))
+            n = CountRxns(path)
+            if n < 10:
+                num = str(n)
+            else:
+                num = '*'
+            sys.stdout.write(num)
+            sys.stdout.flush()
+        else:
+            sys.stdout.write(rejected)
+            sys.stdout.flush()
+        rejected = '.'
     return path_graphs
 
 def test_GetDirectIndependentPaths():
@@ -303,20 +344,22 @@ def test_GetDirectIndependentPaths():
 
     path_C1_C3 = nx.subgraph(G, p1[0:4])
     path_C1_C4 = nx.subgraph(G, p1 + p4[1:4]) # "Bootstrapped" path; C5 cannot exist without C4
+    path_C5_C6 = nx.subgraph(G, p6) # C5 is non-starting, but included in path
 
     assert nx.is_isomorphic(path_C1_C3, GetDirectIndependentPaths(G, 'C1', 'C3', 3)[0])
     assert GetDirectIndependentPaths(G, 'C1', 'C4', 3) == []
-    assert GetDirectIndependentPaths(G, 'C5', 'C6', 5) == [] # C5 is first in the path, but is non-starting and thus a dependency
+    assert nx.is_isomorphic(path_C5_C6, GetDirectIndependentPaths(G, 'C5', 'C6', 5)[0])
+    assert set(path_C5_C6.nodes()) == set(GetDirectIndependentPaths(G, 'C5', 'C6', 5)[0].nodes())
 
 
 
 # Main code block
 def main(infile_name, compound, reaction_limit, n_procs, simple, outfile_name):
-    # Load the network
+    # Load and trim the network (data for every compound and reaction is lost)
     sys.stdout.write("\nLoading network pickle...")
     sys.stdout.flush()
     minetwork = pickle.load(open(infile_name, 'rb'))
-    minetwork_lite = TrimNetwork(minetwork)
+    TrimNetwork(minetwork)
     sys.stdout.write(" Done.\n")
     sys.stdout.flush()
     sys.stdout.write("Identifying starting compounds...")
@@ -325,10 +368,10 @@ def main(infile_name, compound, reaction_limit, n_procs, simple, outfile_name):
     sys.stdout.write(" Done.\n")
     # Check for simple flag
     if simple:
-        sys.stdout.write("Performing pathfinding using %s processes..." % n_procs)
+        sys.stdout.write("Performing pathfinding using %s processes...\n" % n_procs)
         pool = mp.Pool(processes=n_procs)
         M = len(start_comp_ids)
-        arguments = zip(repeat(minetwork_lite, M), start_comp_ids, repeat(compound, M), repeat(reaction_limit, M))
+        arguments = zip(repeat(minetwork, M), start_comp_ids, repeat(compound, M), repeat(reaction_limit, M))
         results_0 = pool.starmap_async(GetDirectIndependentPaths, arguments)
         results = results_0.get()
         #n = 0
