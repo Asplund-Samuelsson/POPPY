@@ -390,15 +390,56 @@ def test_GetRawNetwork():
     assert GetRawNetwork([nad_plus]) == ({nad_plus : nad_comp}, {})
 
 
+def AddCompoundNode(graph, compound, start_comp_ids):
+    """Adds a compound node to the graph."""
+    N = len(graph.nodes()) + 1
+    try:
+        mid = compound['_id']
+    except:
+        sys.stderr.write("Warning: Compound '%s' is malformed and will not be added to the network.\n" % str(compound))
+        sys.stderr.flush()
+        return graph
+    start = False
+    if mid in start_comp_ids:
+        start = True
+    graph.add_node(N, type='c', mid=mid, start=start)
+    return graph
+
+def test_AddCompoundNode():
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    db = "KEGGexp2"
+    con = mc.mineDatabaseServices(server_url)
+
+    G1 = nx.DiGraph()
+    G2 = nx.DiGraph()
+    comp1 = con.get_comps(db, ['Xf5dc8599a48d0111a3a5f618296752e1b53c8d30'])[0]
+    comp2 = con.get_comps(db, ['C38a97a9f962a32b984b1702e07a25413299569ab'])[0]
+
+    G2.add_node(1, type='c', mid=comp1['_id'], start=True)
+    G2.add_node(2, type='c', mid=comp2['_id'], start=False)
+
+    sids = set(['Xf5dc8599a48d0111a3a5f618296752e1b53c8d30'])
+
+    assert nx.is_isomorphic(AddCompoundNode(AddCompoundNode(G1, comp1, sids), comp2, sids), G2)
+    assert G1.node[1]['mid'] == G2.node[1]['mid']
+    assert G1.node[2]['mid'] == G2.node[2]['mid']
+    assert G1.node[1]['start'] == G2.node[1]['start'] == True
+    assert G1.node[2]['start'] == G2.node[2]['start'] == False
+    assert G1.nodes(data=True) == G2.nodes(data=True)
+
+
 def AddQuadReactionNode(graph, rxn):
     """
-    Adds a "Quad Reaction Node" (QRN) group of nodes to a graph.
+    Adds a "Quad Reaction Node" (QRN) group of nodes to a graph, and connects
+    them to the correct compound nodes.
 
     The QRN consists of two nodes constituting the intended forward direction
     of the reaction and two nodes constituting the reverse direction. Each pair
     of nodes is connected by an edge in the direction of the reaction. Each node
     represents a group of compounds on one side of the reaction equation.
     """
+
+    # Make sure the reaction is in good shape
 
     rxn_malformed = False
 
@@ -420,13 +461,50 @@ def AddQuadReactionNode(graph, rxn):
         sys.stderr.flush()
         return graph
 
-    graph.add_node(('rf', rxn_id), data=rxn, c=reactants_f)
-    graph.add_node(('pf', rxn_id), data=rxn, c=products_f)
-    graph.add_edge(('rf', rxn_id), ('pf', rxn_id), weight=1)
+    # Find the compound nodes of the reactants and the products
+    rf = set([])
+    pf = set([])
+    rr = set([])
+    pr = set([])
 
-    graph.add_node(('rr', rxn_id), data=rxn, c=reactants_r)
-    graph.add_node(('pr', rxn_id), data=rxn, c=products_r)
-    graph.add_edge(('rr', rxn_id), ('pr', rxn_id), weight=1)
+    for node in graph.nodes():
+        if graph.node[node]['type'] != 'c':
+            continue
+        if graph.node[node]['mid'] in reactants_f:
+            rf.add(node)
+            pr.add(node)
+        elif graph.node[node]['mid'] in products_f:
+            pf.add(node)
+            rr.add(node)
+
+    # Create the reaction nodes
+    N = len(graph.nodes()) + 1
+
+    graph.add_node(N, type='rf', mid=rxn_id, c=rf)
+    for c_node in rf:
+        graph.add_edge(c_node, N)
+
+    N += 1
+
+    graph.add_node(N, type='pf', mid=rxn_id, c=pf)
+    for c_node in pf:
+        graph.add_edge(N, c_node)
+
+    graph.add_edge(N-1, N) # Forward reaction edge
+
+    N += 1
+
+    graph.add_node(N, type='rr', mid=rxn_id, c=rr)
+    for c_node in rr:
+        graph.add_edge(c_node, N)
+
+    N += 1
+
+    graph.add_node(N, type='pr', mid=rxn_id, c=pr)
+    for c_node in pr:
+        graph.add_edge(N, c_node)
+
+    graph.add_edge(N-1, N) # Reverse reaction edge
 
     return graph
 
@@ -435,56 +513,86 @@ def test_AddQuadReactionNode():
     db = "KEGGexp2"
     con = mc.mineDatabaseServices(server_url)
 
-    c = 'C38a97a9f962a32b984b1702e07a25413299569ab'
     rxn = con.get_rxns(db, ['R04759e864c86cfd0eaeb079404d5f18dae6c7227'])[0]
 
-    reactants = set(['Caf6fc55862387e5fd7cd9635ef9981da7f08a531', 'X25a9fafebc1b08a0ae0fec015803771c73485a61'])
-    products = set(['Cefbaa83ea06e7c31820f93c1a5535e1378aba42b', 'Xf729c487f9b991ec6f645c756cf34b9a20b9e8a4'])
+    r_mid = ['Caf6fc55862387e5fd7cd9635ef9981da7f08a531', 'X25a9fafebc1b08a0ae0fec015803771c73485a61']
+    p_mid = ['Cefbaa83ea06e7c31820f93c1a5535e1378aba42b', 'Xf729c487f9b991ec6f645c756cf34b9a20b9e8a4']
+    r_node_c = set([1,2])
+    p_node_c = set([3]) # Xf729c487f9... is not a compound node in the network
 
     G1 = nx.DiGraph()
-    G1.add_node(('c', c), data=con.get_comps(db, [c])[0])
+    G1.add_node(1, type='c', mid=con.get_comps(db, [r_mid[0]])[0]['_id'], start=False)
+    G1.add_node(2, type='c', mid=con.get_comps(db, [r_mid[1]])[0]['_id'], start=True)
+    G1.add_node(3, type='c', mid=con.get_comps(db, [p_mid[0]])[0]['_id'], start=False)
 
     rxn_id = 'R04759e864c86cfd0eaeb079404d5f18dae6c7227'
 
-    G1.add_node(('rf', rxn_id), data=rxn, c=reactants) # Forward (intended) direction reactants
-    G1.add_node(('pf', rxn_id), data=rxn, c=products) # Forward (intended) direction products
-    G1.add_node(('rr', rxn_id), data=rxn, c=products) # Reverse direction reactants
-    G1.add_node(('pr', rxn_id), data=rxn, c=reactants) # Reverse direction products
-    G1.add_edge(('rf', rxn_id), ('pf', rxn_id), weight=1) # Directed edge for the forward reaction
-    G1.add_edge(('rr', rxn_id), ('pr', rxn_id), weight=1) # Directed edge for the reverse reaction
+    G1.add_node(4, type='rf', mid=rxn_id, c=r_node_c) # Forward (intended) direction reactants
+    G1.add_node(5, type='pf', mid=rxn_id, c=p_node_c) # Forward (intended) direction products
+    G1.add_node(6, type='rr', mid=rxn_id, c=p_node_c) # Reverse direction reactants
+    G1.add_node(7, type='pr', mid=rxn_id, c=r_node_c) # Reverse direction products
+    G1.add_edge(4, 5) # Directed edge for the forward reaction
+    G1.add_edge(6, 7) # Directed edge for the reverse reaction
+
+    # Edges connecting compound and reaction nodes
+    G1.add_edge(1, 4)
+    G1.add_edge(2, 4)
+    G1.add_edge(5, 3)
+    G1.add_edge(3, 6)
+    G1.add_edge(7, 1)
+    G1.add_edge(7, 2)
 
     G2 = nx.DiGraph()
-    G2.add_node(('c', c), data=con.get_comps(db, [c])[0])
+    G2.add_node(1, type='c', mid=con.get_comps(db, [r_mid[0]])[0]['_id'], start=False)
+    G2.add_node(2, type='c', mid=con.get_comps(db, [r_mid[1]])[0]['_id'], start=True)
+    G2.add_node(3, type='c', mid=con.get_comps(db, [p_mid[0]])[0]['_id'], start=False)
+    G2 = AddQuadReactionNode(G2, rxn)
 
-    assert nx.is_isomorphic(AddQuadReactionNode(G2, rxn), G1)
+    assert nx.is_isomorphic(G1, G2)
+    assert G1.nodes(data=True) == G2.nodes(data=True)
 
 
-def AddCompoundNode(graph, compound):
-    """Adds a compound node to the graph."""
-    node_data = compound
-    try:
-        node = ('c', compound['_id'])
-    except:
-        sys.stderr.write("Warning: Compound '%s' is malformed and will not be added to the network.\n" % str(compound))
-        sys.stderr.flush()
-        return graph
-    graph.add_node(node, data=node_data)
-    return graph
+def CheckConnection(minetwork, c_node, r_node):
+    """Checks that the compound-to-reaction node connection is valid."""
+    if c_node not in minetwork.node[r_node]['c']:
+        msg_dict = {
+        'rf':'forward reactants',
+        'pf':'forward products',
+        'rr':'reverse reactants',
+        'pr':'reverse products'
+        }
+        set_name = msg_dict[minetwork.node[r_node]['type']]
+        node_set = ", ".join(["'" + minetwork.node[n]['mid'] + "'" for n in minetwork.node[r_node]['c']])
+        cid = minetwork.node[c_node]['mid']
+        rid = minetwork.node[r_node]['mid']
+        message = "Warning: Compound '%s' is not found in the %s of reaction '%s' (%s). Connection not created.\n" % (cid, set_name, rid, node_set)
+        sys.stderr.write(message)
+        return False
+    else:
+        return True
 
-def test_AddCompoundNode():
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
-    db = "KEGGexp2"
-    con = mc.mineDatabaseServices(server_url)
+def test_CheckConnection(capsys):
+    G = nx.DiGraph(
+    mine_data = {'C1':{'_id':'C1'}, 'C2':{'_id':'C2'}, 'R1':{'_id':'R1'}, 'C3':{'_id':'C3'}},
+    )
+    G.add_node(1, type='c', mid='C1')
+    G.add_node(2, type='c', mid='C2')
+    G.add_node(3, type='rf', mid='R1', c=set([1,2]))
+    G.add_node(4, type='pf', mid='R1', c=set([5]))
+    G.add_node(5, type='c', mid='C3')
+    G.add_node(6, type='rr', mid='R1', c=set([5]))
+    G.add_node(7, type='pr', mid='R1', c=set([1,2]))
 
-    G1 = nx.DiGraph()
-    G2 = nx.DiGraph()
-    comp1 = con.get_comps(db, ['Xf5dc8599a48d0111a3a5f618296752e1b53c8d30'])[0]
-    comp2 = con.get_comps(db, ['C38a97a9f962a32b984b1702e07a25413299569ab'])[0]
+    assert CheckConnection(G, 1, 3)
+    assert CheckConnection(G, 5, 6)
 
-    G2.add_node(('c', comp1['_id']), data=comp1)
-    G2.add_node(('c', comp2['_id']), data=comp2)
+    error_1 = "Warning: Compound 'C3' is not found in the forward reactants of reaction 'R1' ('C1', 'C2'). Connection not created.\n"
+    error_2 = "Warning: Compound 'C3' is not found in the forward reactants of reaction 'R1' ('C2', 'C1'). Connection not created.\n"
+    CheckConnection(G, 5, 3)
+    out, err = capsys.readouterr()
+    assert err in [error_1, error_2]
 
-    assert nx.is_isomorphic(AddCompoundNode(AddCompoundNode(G1, comp1), comp2), G2)
+    assert not CheckConnection(G, 2, 4)
 
 
 def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
@@ -496,78 +604,19 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
 
     start_comp_ids = set(start_comp_ids)
 
-    def CheckConnection(minetwork, c_node, r_node):
-        """Checks that the compound-to-reaction node connection is valid."""
-        if c_node[1] not in minetwork.node[r_node]['c']:
-            msg_dict = {
-            'rf':'forward reactants',
-            'pf':'forward products',
-            'rr':'reverse reactants',
-            'pr':'reverse products'
-            }
-            set_name = msg_dict[r_node[0]]
-            node_set = ", ".join(minetwork.node[r_node]['c'])
-            message = "Warning: Compound '%s' is not found in the %s of reaction '%s' ('%s'). Connection not created.\n" % (c_node[1], set_name, r_node[1], node_set)
-            sys.stderr.write(message)
-            return False
-        else:
-            return True
-
     # Initialise directed graph
-    minetwork = nx.DiGraph()
+    minetwork = nx.DiGraph(mine_data={**comp_dict, **rxn_dict})
 
     # Add all compounds
-    for comp in comp_dict.values():
-        minetwork = AddCompoundNode(minetwork, comp)
-        # Add an attribute to the compound specifying whether it is a starting compound
-        try:
-            comp_id = comp['_id']
-        except:
-            continue
-        if comp_id in start_comp_ids:
-            minetwork.node[('c',comp_id)]['start'] = True
-        else:
-            minetwork.node[('c',comp_id)]['start'] = False
+    for comp_id in sorted(comp_dict.keys()):
+        comp = comp_dict[comp_id]
+        minetwork = AddCompoundNode(minetwork, comp, start_comp_ids)
 
     # Add all reactions
-    for rxn in rxn_dict.values():
+    for rxn_id in sorted(rxn_dict.keys()):
+        rxn = rxn_dict[rxn_id]
         minetwork = AddQuadReactionNode(minetwork, rxn)
 
-    # Iterate over compounds, connecting them to the correct reaction nodes
-    for comp in comp_dict.values():
-        try:
-            comp_id = comp['_id']
-        except:
-            continue
-        c_node = ('c', comp_id) # The compound node to connect
-        try:
-            # Connect to reactions in which the compound is a reactant
-            rxn_ids = comp['Reactant_in']
-            # Only connect reactions that are present in the network/dictionary
-            rxn_ids = set.intersection(set(rxn_dict.keys()), set(rxn_ids))
-            for rxn_id in rxn_ids:
-                rf_node = ('rf', rxn_id)
-                if CheckConnection(minetwork, c_node, rf_node):
-                    minetwork.add_edge(c_node, rf_node, weight=0) # Connect c -> forward reactants
-                pr_node = ('pr', rxn_id)
-                if CheckConnection(minetwork, c_node, pr_node):
-                    minetwork.add_edge(pr_node, c_node, weight=0) # Connect reverse products -> c
-        except KeyError:
-            pass
-        try:
-            # Connect to reactions in which the compound is a product
-            rxn_ids = comp['Product_of']
-            # Only connect reactions that are present in the network/dictionary
-            rxn_ids = set.intersection(set(rxn_dict.keys()), set(rxn_ids))
-            for rxn_id in rxn_ids:
-                pf_node = ('pf', rxn_id)
-                if CheckConnection(minetwork, c_node, pf_node):
-                    minetwork.add_edge(pf_node, c_node, weight=0) # Connect c -> forward products
-                rr_node = ('rr', rxn_id)
-                if CheckConnection(minetwork, c_node, rr_node):
-                    minetwork.add_edge(c_node, rr_node, weight=0) # Connect reverse reactants -> c
-        except KeyError:
-            pass
     print("Done.")
     return minetwork
 
@@ -583,76 +632,80 @@ def test_ConstructNetwork(capsys):
     comp_dict['C8'] = {'_id':'C8', 'Reactant_in':['Rb7'], 'Product_of':['R2f']} # Seeding with non-expanded reaction Rb7
 
     rxn_dict = {}
-    rxn_dict['R99'] = {'_id':'R99', 'Products':[[1,'C2'],[1,'C3']], 'Reactants':[[1,'C1']]}
-    rxn_dict['R1e'] = {'_id':'R1e', 'Products':[[1,'C4'],[1,'C5']], 'Reactants':[[1,'C2']]}
-    rxn_dict['Rc3'] = {'_id':'Rc3', 'Products':[[1,'C3']], 'Reactants':[[1,'C5']]}
-    rxn_dict['Rcd'] = {'_id':'Rcd', 'Products':[[1,'C5'],[1,'C6']], 'Reactants':[[1,'C3']]}
-    rxn_dict['R2f'] = {'_id':'R2f', 'Products':[[1,'C7'],[1,'C8']], 'Reactants':[[1,'C5']]}
+    rxn_dict['R1e'] = {'_id':'R1e', 'Products':[[1,'C4'],[1,'C5']], 'Reactants':[[1,'C2']]} #9
+    rxn_dict['R2f'] = {'_id':'R2f', 'Products':[[1,'C7'],[1,'C8']], 'Reactants':[[1,'C5']]} #13
+    rxn_dict['R99'] = {'_id':'R99', 'Products':[[1,'C2'],[1,'C3']], 'Reactants':[[1,'C1']]} #17
+    rxn_dict['Rc3'] = {'_id':'Rc3', 'Products':[[1,'C3']], 'Reactants':[[1,'C5']]} #21
+    rxn_dict['Rcd'] = {'_id':'Rcd', 'Products':[[1,'C5'],[1,'C6']], 'Reactants':[[1,'C3']]} #25
 
-    G = nx.DiGraph()
+    G = nx.DiGraph(mine_data = {**comp_dict, **rxn_dict})
 
-    for comp in comp_dict.values():
-        G = AddCompoundNode(G, comp)
+    start_comp_ids = set(['C1'])
 
-    for rxn in rxn_dict.values():
-        G = AddQuadReactionNode(G, rxn)
+    for comp_id in sorted(comp_dict.keys()):
+        comp = comp_dict[comp_id]
+        G = AddCompoundNode(G, comp, start_comp_ids)
 
-    for node in G.nodes():
-        if node[0] == 'c':
-            G.node[node]['start'] = False
-    G.node[('c','C1')]['start'] = True # C1 is the starting compound
+    N = 8
+
+    for rxn_id in sorted(rxn_dict.keys()):
+        rxn = rxn_dict[rxn_id]
+        reactants = set([int(x[1][1]) for x in rxn['Reactants']])
+        products = set([int(x[1][1]) for x in rxn['Products']])
+        N += 1
+        G.add_node(N, type='rf', mid=rxn_id, c=reactants)
+        N += 1
+        G.add_node(N, type='pf', mid=rxn_id, c=products)
+        G.add_edge(N-1, N)
+        N += 1
+        G.add_node(N, type='rr', mid=rxn_id, c=products)
+        N += 1
+        G.add_node(N, type='pr', mid=rxn_id, c=reactants)
+        G.add_edge(N-1, N)
 
     # C1 edges
-    c = ('c','C1')
-    G.add_edge(c, ('rf','R99'), weight=0)
-    G.add_edge(('pr','R99'), c, weight=0)
+    G.add_edge(1, 17)
+    G.add_edge(20, 1)
 
     # C2 edges
-    c = ('c','C2')
-    G.add_edge(('pf','R99'), c, weight=0)
-    G.add_edge(c, ('rr','R99'), weight=0)
-    G.add_edge(c, ('rf','R1e'), weight=0)
-    G.add_edge(('pr','R1e'), c, weight=0)
+    G.add_edge(18, 2)
+    G.add_edge(2, 19)
+    G.add_edge(2, 9)
+    G.add_edge(12, 2)
 
     # C3 edges
-    c = ('c','C3')
-    G.add_edge(('pf','R99'), c, weight=0)
-    G.add_edge(c, ('rr','R99'), weight=0)
-    G.add_edge(c, ('rr','Rc3'), weight=0)
-    G.add_edge(('pf','Rc3'), c, weight=0)
-    G.add_edge(c, ('rf','Rcd'), weight=0)
-    G.add_edge(('pr','Rcd'), c, weight=0)
+    G.add_edge(18, 3)
+    G.add_edge(3, 19)
+    G.add_edge(3, 23)
+    G.add_edge(22, 3)
+    G.add_edge(3, 25)
+    G.add_edge(28, 3)
 
     # C4 edges
-    c = ('c','C4')
-    G.add_edge(('pf','R1e'), c, weight=0)
-    G.add_edge(c, ('rr','R1e'), weight=0)
+    G.add_edge(10, 4)
+    G.add_edge(4, 11)
 
     # C5 edges
-    c = ('c','C5')
-    G.add_edge(('pf','R1e'), c, weight=0)
-    G.add_edge(c, ('rr','R1e'), weight=0)
-    G.add_edge(('pr','Rc3'), c, weight=0)
-    G.add_edge(c, ('rf','Rc3'), weight=0)
-    G.add_edge(('pf','Rcd'), c, weight=0)
-    G.add_edge(c, ('rr','Rcd'), weight=0)
-    G.add_edge(c, ('rf','R2f'), weight=0)
-    G.add_edge(('pr','R2f'), c, weight=0)
-    # C7 edges
+    G.add_edge(10, 5)
+    G.add_edge(5, 11)
+    G.add_edge(24, 5)
+    G.add_edge(5, 21)
+    G.add_edge(26, 5)
+    G.add_edge(5, 27)
+    G.add_edge(5, 13)
+    G.add_edge(16, 5)
 
     # C6 edges
-    c = ('c','C6')
-    G.add_edge(('pf','Rcd'), c, weight=0)
-    G.add_edge(c, ('rr','Rcd'), weight=0)
+    G.add_edge(26, 6)
+    G.add_edge(6, 27)
 
-    c = ('c','C7')
-    G.add_edge(('pf','R2f'), c, weight=0)
-    G.add_edge(c, ('rr','R2f'), weight=0)
+    # C7 edges
+    G.add_edge(14, 7)
+    G.add_edge(7, 15)
 
     # C8 edges
-    c = ('c','C8')
-    G.add_edge(('pf','R2f'), c, weight=0)
-    G.add_edge(c, ('rr','R2f'), weight=0)
+    G.add_edge(14, 8)
+    G.add_edge(8, 15)
 
     assert nx.is_isomorphic(ConstructNetwork(comp_dict,rxn_dict,['C1']), G)
 
@@ -663,13 +716,6 @@ def test_ConstructNetwork(capsys):
             t = False
             break
     assert t
-
-    # Test output of CheckConnection
-    comp_dict = {'c':{'_id':'c', 'Reactant_in':['r']}}
-    rxn_dict = {'r':{'_id':'r', 'Products':[[1,'a'],[1,'b']], 'Reactants':[[1,'z']]}}
-    ConstructNetwork(comp_dict, rxn_dict, ['C1'])
-    out, err = capsys.readouterr()
-    assert err == """Warning: Compound 'c' is not found in the forward reactants of reaction 'r' ('z'). Connection not created.\nWarning: Compound 'c' is not found in the reverse products of reaction 'r' ('z'). Connection not created.\n"""
 
 
 # Main code block
