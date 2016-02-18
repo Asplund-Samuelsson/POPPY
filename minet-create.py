@@ -48,72 +48,87 @@ def test_QuickSearch():
     assert QuickSearch(con, db, 'random_query') == []
 
 
-def GetComps(con, db, comp_id_list):
+def GetComp(con, db, comp_id):
     """Wrapper for MineClient3 get_comps() with reconnect functionality."""
     n = 0
-    results = []
     while True:
         try:
-            results = con.get_comps(db, comp_id_list)
-            return results
+            results = con.get_comps(db, [comp_id])
+            break
         except mc.ServerError:
-            return results
+            results = None
         except:
             # Server not responding, try again
             n += 1
             if n % 5 == 0:
-                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), str(comp_id_list))
+                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), comp_id)
                 sys.stderr.write(message)
                 sys.stderr.flush()
             if n >= 36:
-                message = "Warning: Connection attempt limit reached. Returning empty list.\n"
+                message = "Warning: Connection attempt limit reached. Results negative.\n"
                 sys.stderr.write(message)
                 sys.stderr.flush()
-                return results
+                results = None
             if n <= 12:
                 time.sleep(10)
             if n > 12:
                 time.sleep(30)
+    try:
+        results = results[0]
+    except IndexError or TypeError:
+        results = None
+    if results == None:
+        sys.stderr.write("Warning: '%s' could not be retrieved from the database.\n" % comp_id)
+        sys.stderr.flush()
+    return results
 
-def test_GetComps():
+def test_GetComp():
     # Set up connection
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
-    assert GetComps(con, db, ['Cc93137cc81324a5b2872b0bf1c77866c234d66e1'])[0]['Formula'] == 'C7H15O10P'
-    assert GetComps(con, db, ['Cc93137cc81324a5b2872b0bf1c77866c234d66e1'])[0]['dG_error'] == 1.02079
-    assert GetComps(con, db, ['not_a_comp_id']) == [None]
+    assert GetComp(con, db, 'Cc93137cc81324a5b2872b0bf1c77866c234d66e1')['Formula'] == 'C7H15O10P'
+    assert GetComp(con, db, 'Cc93137cc81324a5b2872b0bf1c77866c234d66e1')['dG_error'] == 1.02079
+    assert GetComp(con, db, 'not_a_comp_id') == None
 
 
-def GetRxns(con, db, rxn_id_list):
+def GetRxn(con, db, rxn_id):
     """Wrapper for MineClient3 get_rxns() with reconnect functionality."""
     n = 0
-    results = []
     while True:
         try:
-            results = con.get_rxns(db, rxn_id_list)
-            return results
+            results = con.get_rxns(db, [rxn_id])
+            break
         except mc.ServerError:
-            return results
+            results = None
         except:
             # Server not responding, try again
             n += 1
             if n % 5 == 0:
-                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), rxn_id_list)
+                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), rxn_id)
                 sys.stderr.write(message)
                 sys.stderr.flush()
             if n >= 36:
-                message = "Warning: Connection attempt limit reached. Returning empty list.\n"
+                message = "Warning: Connection attempt limit reached. Results negative.\n"
                 sys.stderr.write(message)
                 sys.stderr.flush()
-                return results
+                results = None
             if n <= 12:
                 time.sleep(10)
             if n > 12:
                 time.sleep(30)
+    try:
+        results = results[0]
+    except IndexError or TypeError:
+        results = None
+    if results == None:
+        sys.stderr.write("Warning: '%s' could not be retrieved from the database.\n" % rxn_id)
+        sys.stderr.flush()
+    return results
 
-def test_GetRxns():
+
+def test_GetRxn():
 
     # Set up connection
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
@@ -124,10 +139,10 @@ def test_GetRxns():
     rxn_op = '1.14.13.e'
     rxn_rlen = 4
 
-    assert len(GetRxns(con, db, [rxn_id])) == 1
-    assert GetRxns(con, db, [rxn_id])[0]['Operators'] == [rxn_op]
-    assert len(GetRxns(con, db, [rxn_id])[0]['Reactants']) == 4
-    assert GetRxns(con, db, ['random_reaction']) == [None]
+    assert type(GetRxn(con, db, rxn_id)) == dict
+    assert GetRxn(con, db, rxn_id)['Operators'] == [rxn_op]
+    assert len(GetRxn(con, db, rxn_id)['Reactants']) == 4
+    assert GetRxn(con, db, 'random_reaction') == None
 
 
 def ReadCompounds(filename):
@@ -253,40 +268,31 @@ def test_ExtractReactionCompIds(capsys):
     assert err == "Warning: The reactant list of 'R3' is not valid.\nWarning: 'R3' does not list its products.\n"
 
 
-def LimitCarbon(con, db, rxn, C_limit=25):
-    """Returns True if a compound in the reaction exceeds the carbon atom limit."""
+def LimitCarbon(comp, C_limit=25):
+    """Returns True if the compound exceeds the carbon atom limit, otherwise False."""
     regex = re.compile('C{1}[0-9]*')
-    comps = GetComps(con, db, ExtractReactionCompIds(rxn))
     try:
-        rxn_id = rxn['_id']
+        formula = comp['Formula']
     except KeyError:
-        sys.stderr.write("Warning: Reaction '%s' will be not be considered as it lacks an ID." % str(rxn))
+        try:
+            comp_id = comp['_id']
+        except KeyError:
+            comp_id = 'UnknownCompound'
+        sys.stderr.write("Warning: Compound '%s' lacks a formula and will pass the C limit." % (comp_id, rxn_id))
         sys.stderr.flush()
         return False
-    for comp in comps:
-        if type(comp) != dict:
-            # Skip compound if it is not a dictionary (i.e. None for lack of db entry)
-            continue
+    match = re.search(regex, formula)
+    if match:
         try:
-            formula = comp['Formula']
-        except KeyError:
-            try:
-                comp_id = comp['_id']
-            except KeyError:
-                comp_id = 'UnknownCompound'
-            sys.stderr.write("Warning: Compound '%s' in reaction '%s' lacks a formula and will not be evaluated for C content." % (comp_id, rxn_id))
-            sys.stderr.flush()
-            continue
-        match = re.search(regex, formula)
-        if match:
-            try:
-                C_count = int(match.group(0).split('C')[1])
-            except ValueError:
-                C_count = 1
-        else:
-            C_count = 0
-        if C_count > C_limit:
-            return True
+            C_count = int(match.group(0).split('C')[1])
+        except ValueError:
+            C_count = 1
+    else:
+        C_count = 0
+    if C_count > C_limit:
+        return True
+    else:
+        return False
 
 def test_LimitCarbon():
     # Set up connection
@@ -295,12 +301,51 @@ def test_LimitCarbon():
     db = "KEGGexp2"
 
     rxn = con.get_rxns(db, ['R180569d0b4cec9c8392f78015bf8d5341ca05c66'])[0]
-    assert LimitCarbon(con, db, rxn, 25)
-    assert not LimitCarbon(con, db, rxn, 50)
+
+    test_1_25 = []
+    test_1_50 = []
+    for comp in [con.get_comps(db, [comp_id])[0] for comp_id in ExtractReactionCompIds(rxn)]:
+        test_1_25.append(LimitCarbon(comp, 25))
+        test_1_50.append(LimitCarbon(comp, 50))
+
+    assert True in test_1_25
+    assert True not in test_1_50
 
     rxn = con.get_rxns(db, ['R25b1c5f3ec86899ccbd244413c5e53140c626646'])[0]
-    assert not LimitCarbon(con, db, rxn)
-    assert LimitCarbon(con, db, rxn, 20)
+
+    test_2_def = []
+    test_2_20 = []
+    for comp in [con.get_comps(db, [comp_id])[0] for comp_id in ExtractReactionCompIds(rxn)]:
+        test_2_def.append(LimitCarbon(comp))
+        test_2_20.append(LimitCarbon(comp, 20))
+
+    assert True not in test_2_def
+    assert True in test_2_20
+
+
+def ExtractCompReactionIds(comp):
+    """Extracts all reaction IDs from a MINE compound object."""
+    rxn_id_list = []
+    try:
+        rxn_id_list.extend(comp['Reactant_in'])
+    except KeyError:
+        pass
+    try:
+        rxn_id_list.extend(comp['Product_of'])
+    except KeyError:
+        pass
+    return rxn_id_list
+
+
+def test_ExtractCompReactionIds():
+    C1 = {'_id':'C1', 'Reactant_in':['R1']}
+    C2 = {'_id':'C1', 'Reactant_in':['R2'], 'Product_of':['R3']}
+    C3 = {'_id':'C1', 'Product_of':['R3', 'R4']}
+    C4 = {'_id':'C4'}
+    assert ExtractCompReactionIds(C1) == ['R1']
+    assert ExtractCompReactionIds(C2) == ['R2','R3']
+    assert ExtractCompReactionIds(C3) == ['R3','R4']
+    assert ExtractCompReactionIds(C4) == []
 
 
 def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
@@ -324,77 +369,94 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
 
     # First add the starting compounds
     for comp_id in comp_id_list:
-        comps += 1
-        sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), comp_id))
-        sys.stdout.flush()
-        try:
-            comp = GetComps(con, db, [comp_id])[0]
+        comp = GetComp(con, db, comp_id)
+        if comp == None: continue
+        if not LimitCarbon(comp, C_limit):
             comp_dict[comp_id] = comp # Add compound to dict
-        except IndexError:
-            sys.stderr.write("Warning: '%s' could not be retrieved from the database.\n" % comp_id)
+            comps += 1
+            sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), comp_id))
+            sys.stdout.flush()
+        else:
+            sys.stderr.write("Warning: Starting compound '%s' exceeds the C limit and is excluded.\n" % comp_id)
             sys.stderr.flush()
 
     extended_comp_ids = set()
+    rxn_exceeding_C_limit = set()
+    comp_exceeding_C_limit = set()
+    comp_cache = {}
 
     # Perform stepwise expansion of downloaded data
     while steps < step_limit:
+        # A new step begins
         steps += 1
         print("")
+        # Get the unexplored compounds by subtracting explored from all that are stored
         unextended_comp_ids = set(comp_dict.keys()) - extended_comp_ids
+        # Go through each unexplored compound
         for comp_id in unextended_comp_ids:
             comp = comp_dict[comp_id] # New compounds are always in the dictionary
-            rxn_id_list = []
-            try:
-                rxn_id_list.extend(comp['Reactant_in'])
-            except KeyError:
-                pass
-            try:
-                rxn_id_list.extend(comp['Product_of'])
-            except KeyError:
-                pass
+            # Get a list of the reactions that the compound is involved in
+            rxn_id_list = ExtractCompReactionIds(comp)
+            # Go through each reaction
             for rxn_id in rxn_id_list:
+                # Immediately skip reactions that are known to exceed the C limit
+                if rxn_id in rxn_exceeding_C_limit: continue
                 # Only download new reactions
                 try:
+                    # Already explored reactions are in the reaction dictionary
+                    # No further manipulation of the reaction is needed
                     rxn = rxn_dict[rxn_id]
                 except KeyError:
-                    try:
-                        rxn = GetRxns(con, db, [rxn_id])[0]
-                        if rxn != None:
-                            if not LimitCarbon(con, db, rxn, C_limit):
-                                rxn_dict[rxn_id] = rxn # Add new reaction if it exists and passes the C limit
-                            else:
-                                continue
-                        else:
-                            sys.stderr.write("Warning: '%s' appears to have no record in the database.\n" % rxn_id)
-                            sys.stderr.flush()
-                            continue
-                    except IndexError:
-                        sys.stderr.write("Warning: '%s' could not be retrieved from the database.\n" % rxn_id)
-                        sys.stderr.flush()
-                        continue
-                rxn_comp_ids = ExtractReactionCompIds(rxn)
-                for rxn_comp_id in rxn_comp_ids:
-                    # Only download new compounds
-                    try:
-                        rxn_comp = comp_dict[rxn_comp_id]
-                    except KeyError:
+                    # We're now exploring a new reaction
+                    rxn = GetRxn(con, db, rxn_id)
+                    if rxn == None: continue
+                    rxn_comp_ids = ExtractReactionCompIds(rxn)
+                    # We will keep track of newly discovered compounds
+                    new_rxn_comp_ids = []
+                    for rxn_comp_id in rxn_comp_ids:
                         try:
-                            rxn_comp = GetComps(con, db, [rxn_comp_id])[0]
-                            if rxn_comp != None:
-                                comp_dict[rxn_comp_id] = rxn_comp # Add new compound
-                                comps += 1
-                                sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), rxn_comp_id))
-                                sys.stdout.flush()
-                            else:
-                                sys.stderr.write("Warning: '%s' in '%s' appears to have no record in the database.\n" % (rxn_comp_id, rxn_id))
-                                sys.stderr.flush()
-                            # Break here if comp_limit is reached
-                            if comps >= comp_limit:
-                                print("Done.")
-                                return (comp_dict, rxn_dict)
-                        except IndexError:
-                            sys.stderr.write("Warning: '%s' in '%s' could not be retrieved from the database.\n" % (rxn_id, rxn_id))
-                            sys.stderr.flush()
+                            rxn_comp = comp_dict[rxn_comp_id]
+                        except KeyError:
+                            # We're now looking at a compound that is currently not in the comp_dict
+                            if rxn_comp_id in comp_exceeding_C_limit:
+                                # The compound has previously been identified as exceeding the C limit
+                                rxn_exceeding_C_limit.add(rxn_id)
+                                # We don't want to explore this reaction further and thus break
+                                break
+                            # The compound has not been encountered before
+                            # Let's check if it is in the cache before downloading it
+                            try:
+                                rxn_comp = comp_cache[rxn_comp_id]
+                            except KeyError:
+                                rxn_comp = GetComp(con, db, rxn_comp_id)
+                            if rxn_comp == None: continue
+                            if LimitCarbon(rxn_comp, C_limit):
+                                # The compound exceeds the limit and both compound and reaction
+                                # are added to the sets of known transgressors
+                                comp_exceeding_C_limit.add(rxn_comp_id)
+                                rxn_exceeding_C_limit.add(rxn_id)
+                                # We don't want to explore this reaction further and thus break
+                                break
+                            # The compound passed the C limit
+                            # Add it to the comp_cache and the list of new compounds
+                            comp_cache[rxn_comp_id] = rxn_comp
+                            new_rxn_comp_ids.append(rxn_comp_id)
+                    # We've made it through the compounds of the reaction
+                    # Let's ensure the reaction did not exceed the C limit
+                    if rxn_id in rxn_exceeding_C_limit: continue
+                    # The reaction did not exceed the C limit, so let's harvest the new compounds
+                    for new_rxn_comp_id in new_rxn_comp_ids:
+                        comp_dict[new_rxn_comp_id] = comp_cache[new_rxn_comp_id]
+                        comps += 1
+                        sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), comp_id))
+                        sys.stdout.flush()
+                        # Stop at compound limit here
+                        if comps >= comp_limit:
+                            print("Done.")
+                            return (comp_dict, rxn_dict)
+                    # Finally, the new reaction is welcome in the reaction dictionary
+                    rxn_dict[rxn_id] = rxn
+            # All reactions of the compound have been explored
             extended_comp_ids.add(comp_id)
     print("Done.")
     return (comp_dict, rxn_dict)
@@ -446,7 +508,26 @@ def test_GetRawNetwork():
     huge = 'Caf6fc55862387e5fd7cd9635ef9981da7f08a531'
     huge_comp = con.get_comps(db, [huge])[0]
 
-    assert GetRawNetwork([huge]) == ({huge : huge_comp}, {})
+    assert GetRawNetwork([huge]) == ({}, {})
+
+    # Using octanol to test the carbon limit
+    octanol = 'Cf6baa9f91035ac294770d5e0bfbe039e5ab67261'
+    C24_comp = 'C479f661686a597fa18f69c533438aa7bf0e1fd89' # This is connected by 1 step
+
+    net_C25 = GetRawNetwork([octanol], 1)
+    net_C20 = GetRawNetwork([octanol], 1, C_limit=20)
+
+    try:
+        x = net_C25[0][C24_comp]['_id']
+    except KeyError:
+        x = 1
+    try:
+        y = net_C20[0][C24_comp]['_id']
+    except KeyError:
+        y = 1
+
+    assert x == C24_comp
+    assert y == 1
 
 
 def AddCompoundNode(graph, compound, start_comp_ids):
