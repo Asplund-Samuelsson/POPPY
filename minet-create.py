@@ -253,7 +253,57 @@ def test_ExtractReactionCompIds(capsys):
     assert err == "Warning: The reactant list of 'R3' is not valid.\nWarning: 'R3' does not list its products.\n"
 
 
-def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
+def LimitCarbon(con, db, rxn, C_limit=25):
+    """Returns True if a compound in the reaction exceeds the carbon atom limit."""
+    regex = re.compile('C{1}[0-9]*')
+    comps = GetComps(con, db, ExtractReactionCompIds(rxn))
+    try:
+        rxn_id = rxn['_id']
+    except KeyError:
+        sys.stderr.write("Warning: Reaction '%s' will be not be considered as it lacks an ID." % str(rxn))
+        sys.stderr.flush()
+        return False
+    for comp in comps:
+        if type(comp) != dict:
+            # Skip compound if it is not a dictionary (i.e. None for lack of db entry)
+            continue
+        try:
+            formula = comp['Formula']
+        except KeyError:
+            try:
+                comp_id = comp['_id']
+            except KeyError:
+                comp_id = 'UnknownCompound'
+            sys.stderr.write("Warning: Compound '%s' in reaction '%s' lacks a formula and will not be evaluated for C content." % (comp_id, rxn_id))
+            sys.stderr.flush()
+            continue
+        match = re.search(regex, formula)
+        if match:
+            try:
+                C_count = int(match.group(0).split('C')[1])
+            except ValueError:
+                C_count = 1
+        else:
+            C_count = 0
+        if C_count > C_limit:
+            return True
+
+def test_LimitCarbon():
+    # Set up connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    rxn = con.get_rxns(db, ['R180569d0b4cec9c8392f78015bf8d5341ca05c66'])[0]
+    assert LimitCarbon(con, db, rxn, 25)
+    assert not LimitCarbon(con, db, rxn, 50)
+
+    rxn = con.get_rxns(db, ['R25b1c5f3ec86899ccbd244413c5e53140c626646'])[0]
+    assert not LimitCarbon(con, db, rxn)
+    assert LimitCarbon(con, db, rxn, 20)
+
+
+def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
     """Download connected reactions and compounds up to the limits."""
 
     sys.stdout.write("\nDownloading raw network data...\n")
@@ -310,7 +360,10 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000):
                     try:
                         rxn = GetRxns(con, db, [rxn_id])[0]
                         if rxn != None:
-                            rxn_dict[rxn_id] = rxn # Add new reaction
+                            if not LimitCarbon(con, db, rxn, C_limit):
+                                rxn_dict[rxn_id] = rxn # Add new reaction if it exists and passes the C limit
+                            else:
+                                continue
                         else:
                             sys.stderr.write("Warning: '%s' appears to have no record in the database.\n" % rxn_id)
                             sys.stderr.flush()
@@ -381,13 +434,19 @@ def test_GetRawNetwork():
 
     compound_ids = ['Cefbaa83ea06e7c31820f93c1a5535e1378aba42b','C38a97a9f962a32b984b1702e07a25413299569ab']
 
-    assert GetRawNetwork(compound_ids, step_limit=2) == (comp_dict, rxn_dict)
+    assert GetRawNetwork(compound_ids, step_limit=2, C_limit=500) == (comp_dict, rxn_dict)
 
     # NAD+ should not be connected via reactions
     nad_plus = 'Xf5dc8599a48d0111a3a5f618296752e1b53c8d30'
     nad_comp = con.get_comps(db, [nad_plus])[0]
 
-    assert GetRawNetwork([nad_plus]) == ({nad_plus : nad_comp}, {})
+    assert GetRawNetwork([nad_plus], C_limit=500) == ({nad_plus : nad_comp}, {})
+
+    # Huge compounds are not allowed to grow
+    huge = 'Caf6fc55862387e5fd7cd9635ef9981da7f08a531'
+    huge_comp = con.get_comps(db, [huge])[0]
+
+    assert GetRawNetwork([huge]) == ({huge : huge_comp}, {})
 
 
 def AddCompoundNode(graph, compound, start_comp_ids):
@@ -399,9 +458,10 @@ def AddCompoundNode(graph, compound, start_comp_ids):
         sys.stderr.write("Warning: Compound '%s' is malformed and will not be added to the network.\n" % str(compound))
         sys.stderr.flush()
         return graph
-    start = False
     if mid in start_comp_ids:
         start = True
+    else:
+        start = False
     graph.add_node(N, type='c', mid=mid, start=start)
     return graph
 
@@ -426,6 +486,49 @@ def test_AddCompoundNode():
     assert G1.node[1]['start'] == G2.node[1]['start'] == True
     assert G1.node[2]['start'] == G2.node[2]['start'] == False
     assert G1.nodes(data=True) == G2.nodes(data=True)
+
+
+def CheckConnection(minetwork, c_node, r_node):
+    """Checks that the compound-to-reaction node connection is valid."""
+
+    con_check = False
+
+    c_mid = minetwork.node[c_node]['mid']
+    r_mid = minetwork.node[r_node]['mid']
+    r_type = minetwork.node[r_node]['type']
+
+    if r_type in {'rf','pr'}:
+        try:
+            if r_mid in minetwork.graph['mine_data'][c_mid]['Reactant_in']:
+                con_check = True
+        except KeyError:
+            pass
+
+    if r_type in {'pf','rr'}:
+        try:
+            if r_mid in minetwork.graph['mine_data'][c_mid]['Product_of']:
+                con_check = True
+        except KeyError:
+            pass
+
+    return con_check
+
+def test_CheckConnection(capsys):
+    G = nx.DiGraph(
+    mine_data = {'C1':{'_id':'C1','Reactant_in':['R1']}, 'C2':{'_id':'C2','Reactant_in':['R1']}, 'R1':{'_id':'R1', 'Reactants':[[1,'C1'],[1,'C2']], 'Products':[[1,'C3']]}, 'C3':{'_id':'C3','Product_of':['R1']}},
+    )
+    G.add_node(1, type='c', mid='C1')
+    G.add_node(2, type='c', mid='C2')
+    G.add_node(3, type='rf', mid='R1', c=set([1,2]))
+    G.add_node(4, type='pf', mid='R1', c=set([5]))
+    G.add_node(5, type='c', mid='C3')
+    G.add_node(6, type='rr', mid='R1', c=set([5]))
+    G.add_node(7, type='pr', mid='R1', c=set([1,2]))
+
+    assert CheckConnection(G, 1, 3)
+    assert CheckConnection(G, 5, 6)
+
+    assert not CheckConnection(G, 2, 4)
 
 
 def AddQuadReactionNode(graph, rxn):
@@ -473,7 +576,7 @@ def AddQuadReactionNode(graph, rxn):
         if graph.node[node]['mid'] in reactants_f:
             rf.add(node)
             pr.add(node)
-        elif graph.node[node]['mid'] in products_f:
+        if graph.node[node]['mid'] in products_f:
             pf.add(node)
             rr.add(node)
 
@@ -482,13 +585,15 @@ def AddQuadReactionNode(graph, rxn):
 
     graph.add_node(N, type='rf', mid=rxn_id, c=rf)
     for c_node in rf:
-        graph.add_edge(c_node, N)
+        if CheckConnection(graph, c_node, N):
+            graph.add_edge(c_node, N)
 
     N += 1
 
     graph.add_node(N, type='pf', mid=rxn_id, c=pf)
     for c_node in pf:
-        graph.add_edge(N, c_node)
+        if CheckConnection(graph, c_node, N):
+            graph.add_edge(N, c_node)
 
     graph.add_edge(N-1, N) # Forward reaction edge
 
@@ -496,13 +601,15 @@ def AddQuadReactionNode(graph, rxn):
 
     graph.add_node(N, type='rr', mid=rxn_id, c=rr)
     for c_node in rr:
-        graph.add_edge(c_node, N)
+        if CheckConnection(graph, c_node, N):
+            graph.add_edge(c_node, N)
 
     N += 1
 
     graph.add_node(N, type='pr', mid=rxn_id, c=pr)
     for c_node in pr:
-        graph.add_edge(N, c_node)
+        if CheckConnection(graph, c_node, N):
+            graph.add_edge(N, c_node)
 
     graph.add_edge(N-1, N) # Reverse reaction edge
 
@@ -518,12 +625,12 @@ def test_AddQuadReactionNode():
     r_mid = ['Caf6fc55862387e5fd7cd9635ef9981da7f08a531', 'X25a9fafebc1b08a0ae0fec015803771c73485a61']
     p_mid = ['Cefbaa83ea06e7c31820f93c1a5535e1378aba42b', 'Xf729c487f9b991ec6f645c756cf34b9a20b9e8a4']
     r_node_c = set([1,2])
-    p_node_c = set([3]) # Xf729c487f9... is not a compound node in the network
+    p_node_c = set([3]) # Xf729c487f9... is here not a compound node in the network
 
     G1 = nx.DiGraph()
-    G1.add_node(1, type='c', mid=con.get_comps(db, [r_mid[0]])[0]['_id'], start=False)
-    G1.add_node(2, type='c', mid=con.get_comps(db, [r_mid[1]])[0]['_id'], start=True)
-    G1.add_node(3, type='c', mid=con.get_comps(db, [p_mid[0]])[0]['_id'], start=False)
+    G1.add_node(1, type='c', mid=con.get_comps(db, [r_mid[0]])[0]['_id'], start=False) # r_mid[0] is connected
+    G1.add_node(2, type='c', mid=con.get_comps(db, [r_mid[1]])[0]['_id'], start=True) # r_mid[1] is ATP; not connected
+    G1.add_node(3, type='c', mid=con.get_comps(db, [p_mid[0]])[0]['_id'], start=False) # p_mid[0] is connected
 
     rxn_id = 'R04759e864c86cfd0eaeb079404d5f18dae6c7227'
 
@@ -536,13 +643,17 @@ def test_AddQuadReactionNode():
 
     # Edges connecting compound and reaction nodes
     G1.add_edge(1, 4)
-    G1.add_edge(2, 4)
+    #G1.add_edge(2, 4) # ATP should not be connected
     G1.add_edge(5, 3)
     G1.add_edge(3, 6)
     G1.add_edge(7, 1)
-    G1.add_edge(7, 2)
+    #G1.add_edge(7, 2) # ATP should not be connected
 
-    G2 = nx.DiGraph()
+    G2 = nx.DiGraph(mine_data={
+    r_mid[0] : con.get_comps(db, [r_mid[0]])[0],
+    r_mid[1] : con.get_comps(db, [r_mid[1]])[0],
+    p_mid[0] : con.get_comps(db, [p_mid[0]])[0]
+    })
     G2.add_node(1, type='c', mid=con.get_comps(db, [r_mid[0]])[0]['_id'], start=False)
     G2.add_node(2, type='c', mid=con.get_comps(db, [r_mid[1]])[0]['_id'], start=True)
     G2.add_node(3, type='c', mid=con.get_comps(db, [p_mid[0]])[0]['_id'], start=False)
@@ -551,48 +662,22 @@ def test_AddQuadReactionNode():
     assert nx.is_isomorphic(G1, G2)
     assert G1.nodes(data=True) == G2.nodes(data=True)
 
+    r1 = {'_id':'R1','Reactants':[[1,'C1'],[1,'X1']],'Products':[[1,'C2'],[1,'X2']]}
+    r2 = {'_id':'R2','Reactants':[[1,'C2']],'Products':[[1,'C3']]}
+    c1 = {'_id':'C1','Reactant_in':['R1']}
+    c2 = {'_id':'C2','Product_of':['R1'],'Reactant_in':['R2']}
+    c3 = {'_id':'C3','Product_of':['R2']}
+    x1 = {'_id':'X1'}
+    G3 = nx.DiGraph(mine_data={'R1':r1,'R2':r2,'C1':c1,'C2':c2,'C3':c3})
+    G3.add_node(1,mid='C1',type='c')
+    G3.add_node(2,mid='C2',type='c')
+    G3.add_node(3,mid='C3',type='c')
+    G3.add_node(4,mid='X1',type='c')
+    G3 = AddQuadReactionNode(G3, r1)
+    G3 = AddQuadReactionNode(G3, r2)
 
-def CheckConnection(minetwork, c_node, r_node):
-    """Checks that the compound-to-reaction node connection is valid."""
-    if c_node not in minetwork.node[r_node]['c']:
-        msg_dict = {
-        'rf':'forward reactants',
-        'pf':'forward products',
-        'rr':'reverse reactants',
-        'pr':'reverse products'
-        }
-        set_name = msg_dict[minetwork.node[r_node]['type']]
-        node_set = ", ".join(["'" + minetwork.node[n]['mid'] + "'" for n in minetwork.node[r_node]['c']])
-        cid = minetwork.node[c_node]['mid']
-        rid = minetwork.node[r_node]['mid']
-        message = "Warning: Compound '%s' is not found in the %s of reaction '%s' (%s). Connection not created.\n" % (cid, set_name, rid, node_set)
-        sys.stderr.write(message)
-        return False
-    else:
-        return True
-
-def test_CheckConnection(capsys):
-    G = nx.DiGraph(
-    mine_data = {'C1':{'_id':'C1'}, 'C2':{'_id':'C2'}, 'R1':{'_id':'R1'}, 'C3':{'_id':'C3'}},
-    )
-    G.add_node(1, type='c', mid='C1')
-    G.add_node(2, type='c', mid='C2')
-    G.add_node(3, type='rf', mid='R1', c=set([1,2]))
-    G.add_node(4, type='pf', mid='R1', c=set([5]))
-    G.add_node(5, type='c', mid='C3')
-    G.add_node(6, type='rr', mid='R1', c=set([5]))
-    G.add_node(7, type='pr', mid='R1', c=set([1,2]))
-
-    assert CheckConnection(G, 1, 3)
-    assert CheckConnection(G, 5, 6)
-
-    error_1 = "Warning: Compound 'C3' is not found in the forward reactants of reaction 'R1' ('C1', 'C2'). Connection not created.\n"
-    error_2 = "Warning: Compound 'C3' is not found in the forward reactants of reaction 'R1' ('C2', 'C1'). Connection not created.\n"
-    CheckConnection(G, 5, 3)
-    out, err = capsys.readouterr()
-    assert err in [error_1, error_2]
-
-    assert not CheckConnection(G, 2, 4)
+    assert len(G3.edges()) == 12
+    assert len(G3.nodes()) == 12
 
 
 def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
@@ -719,11 +804,11 @@ def test_ConstructNetwork(capsys):
 
 
 # Main code block
-def main(infile_name, step_limit, comp_limit, outfile_name):
+def main(infile_name, step_limit, comp_limit, C_limit, outfile_name):
     # Get starting compound MINE IDs
     start_ids = list(set(KeggToMineId(ReadCompounds(infile_name)).values()))
     # Create the network
-    minetwork = ConstructNetwork(*GetRawNetwork(start_ids, step_limit, comp_limit), start_ids)
+    minetwork = ConstructNetwork(*GetRawNetwork(start_ids, step_limit, comp_limit, C_limit), start_ids)
     # Save to Pickle
     pickle.dump(minetwork, open(outfile_name, 'wb'))
 
@@ -735,5 +820,6 @@ if __name__ == "__main__":
     parser.add_argument('outfile', help='Write MINE network to Python Pickle file.')
     parser.add_argument('-r', type=int, default=10, help='Maximum number of reaction steps to download.')
     parser.add_argument('-c', type=int, default=100000, help='Maximum number of compounds to download.')
+    parser.add_argument('-C', type=int, default=25, help='Maximum number of C atoms per molecule for following a reaction.')
     args = parser.parse_args()
-    main(args.infile, args.r, args.c, args.outfile)
+    main(args.infile, args.r, args.c, args.C, args.outfile)
