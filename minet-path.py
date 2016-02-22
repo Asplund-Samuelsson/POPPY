@@ -194,8 +194,12 @@ def DistanceToOrigin(network, N=-1):
     Returns two sets in a tuple: Valid compound nodes and valid reactant nodes.
     """
 
-    sys.stdout.write("\nCalculating minimum distance of nodes to origin...\n")
+    sys.stdout.write("\nCalculating minimum distance of nodes to origin...\n\n")
     sys.stdout.flush()
+
+    # Number of nodes for formatting
+    L = len(network.nodes())
+    l = len(str(L))
 
     # Set up counters
     n = 0
@@ -250,8 +254,9 @@ def DistanceToOrigin(network, N=-1):
             if node_type == 'rr':
                 rr += 1
 
-        sys.stdout.write("Step %s:    %s c   %s rf   %s pf   %s rr   %s pr\n" % (str(n), str(c), str(rf), str(pf), str(rr), str(pr)))
-        sys.stdout.flush()
+        # Nicely (hopefully) formatted progress output
+        output = '{0:<%s} {1:>%s} {2:>%s} {3:>%s} {4:>%s} {5:>%s}' % (str(l+6), str(l+5), str(l+5), str(l+5), str(l+5), str(l+5))
+        print(output.format('Step ' + str(n) + ':', str(c) + ' c', str(rf) + ' rf', str(pf) + ' pf', str(rr) + ' rr', str(pr) + ' pr'))
 
         n += 1
 
@@ -342,15 +347,54 @@ def test_DistanceToOrigin():
 
 
 def PruneNetwork(network):
-    """"""
-
-    return None
+    """Remove all nodes that are 'unreachable' defined as lacking a 'dist' data key."""
+    for node in network.nodes():
+        try:
+            x = network.node[node]['dist']
+        except KeyError:
+            network.remove_node(node)
 
 def test_PruneNetwork():
     # Nodes that were not reached in DistanceToOrigin are going to lack the 'dist' data key
     # Such nodes are expected to be removed
-    G = nx.DiGraph
-    assert PruneNetwork()
+    G = nx.DiGraph()
+    G.add_node(1,type='c',start=False)
+    G.add_node(2,type='rf',c={1})
+    G.add_node(3,type='pf',c={4})
+    G.add_node(4,type='c',start=False)
+    G.add_path([1,2,3,4])
+    G.add_node(9,type='rr',c={4})
+    G.add_node(10,type='pr',c={1})
+    G.add_path([4,9,10,1])
+    G.add_node(5,type='c',start=False)
+    G.add_node(6,type='rf',c={1,5})
+    G.add_node(7,type='pf',c={8})
+    G.add_node(8,type='c',start=True) # Compound 8 is now the start
+    G.add_path([1,6,7,8])
+    G.add_edge(5,6)
+    G.add_node(11,type='rr',c={8})
+    G.add_node(12,type='pr',c={1,5})
+    G.add_path([8,11,12,1])
+    G.add_edge(12,5)
+
+    H = G.copy()
+
+    output = DistanceToOrigin(G, 1)
+    output = DistanceToOrigin(H, 2)
+
+    Y = G.subgraph([1,2,5,6,8,11,12])
+    Z = H.subgraph([1,2,3,4,5,6,7,8,9,11,12])
+
+    PruneNetwork(G)
+    PruneNetwork(H)
+
+    assert nx.is_isomorphic(G,Y)
+    assert G.nodes(data=True) == Y.nodes(data=True)
+    assert set(G.edges()) == set(Y.edges())
+
+    assert nx.is_isomorphic(H,Z)
+    assert H.nodes(data=True) == Z.nodes(data=True)
+    assert set(H.edges()) == set(Z.edges())
 
 
 def DetectLoops(path):
