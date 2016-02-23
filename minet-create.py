@@ -8,6 +8,8 @@ import sys
 import argparse
 import pickle
 import time
+import queue
+import threading
 
 # Define functions
 def QuickSearch(con, db, query):
@@ -46,6 +48,60 @@ def test_QuickSearch():
 
     assert QuickSearch(con, db, 'C00022')[0]['Names'][0] == 'Pyruvate'
     assert QuickSearch(con, db, 'random_query') == []
+
+
+def ThreadedQuickSearch(con, db, query_list):
+    """Threaded implementation of QuickSearch, taking a list of queries as input."""
+    def Worker():
+        while True:
+            query = work.get()
+            if query is None:
+                break
+            sys.stdout.write("\rHandling quick query '%s'." % str(query))
+            sys.stdout.flush()
+            output.put(QuickSearch(con, db, query))
+            work.task_done()
+
+    work = queue.Queue()
+    output = queue.Queue()
+
+    threads = []
+    num_workers = 128
+
+    for i in range(num_workers):
+        t = threading.Thread(target=Worker)
+        t.start()
+        threads.append(t)
+
+    for query in query_list:
+        work.put(query)
+
+    # Block until all work is done
+    work.join()
+
+    # Stop workers
+    for i in range(num_workers):
+        work.put(None)
+    for t in threads:
+        t.join()
+
+    # Get the results
+    results = []
+
+    while not output.empty():
+        results.extend(output.get())
+
+    return results
+
+def test_ThreadedQuickSearch():
+    # Set up connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    assert ThreadedQuickSearch(con, db, ['C00022'])[0]['Names'][0] == 'Pyruvate'
+    assert ThreadedQuickSearch(con, db, ['random_query']) == []
+    assert len(ThreadedQuickSearch(con, db, ['C00022','C01719','C13842','C00231'])) == 4
 
 
 def GetComp(con, db, comp_id):
@@ -91,6 +147,77 @@ def test_GetComp():
     assert GetComp(con, db, 'Cc93137cc81324a5b2872b0bf1c77866c234d66e1')['Formula'] == 'C7H15O10P'
     assert GetComp(con, db, 'Cc93137cc81324a5b2872b0bf1c77866c234d66e1')['dG_error'] == 1.02079
     assert GetComp(con, db, 'not_a_comp_id') == None
+
+
+def ThreadedGetComps(con, db, comp_id_list):
+    """Threaded implementation of GetComp, taking a list of compound ids as input."""
+    def Worker():
+        while True:
+            comp_id = work.get()
+            if comp_id is None:
+                break
+            sys.stdout.write("\rHandling compound query '%s'." % str(comp_id))
+            sys.stdout.flush()
+            output.put(GetComp(con, db, comp_id))
+            work.task_done()
+
+    work = queue.Queue()
+    output = queue.Queue()
+
+    threads = []
+    num_workers = 128
+
+    for i in range(num_workers):
+        t = threading.Thread(target=Worker)
+        t.start()
+        threads.append(t)
+
+    for comp_id in comp_id_list:
+        work.put(comp_id)
+
+    # Block until all work is done
+    work.join()
+
+    # Stop workers
+    for i in range(num_workers):
+        work.put(None)
+    for t in threads:
+        t.join()
+
+    # Get the results
+    comps = []
+
+    while not output.empty():
+        comps.append(output.get())
+
+    return comps
+
+def test_ThreadedGetComps():
+    # Set up connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    comp_ids = ['C1bb250660ea917ddaa2b2777b4773facd6bebb33',
+    'C9effc25891ed5be2d4e0804f72e7c78f24e08825',
+    'Ce0b888f73c8eabf45289f3fd8e564ff0a92f0014',
+    'Cee14c71f197998d923eefb144761a1626a87b738',
+    'C6efa5f2bc583af46e2f0c53f112c875abc916d37']
+
+    comps = [con.get_comps(db, [comp_id])[0] for comp_id in comp_ids]
+
+    comps_t = ThreadedGetComps(con, db, comp_ids)
+
+    elements_identical = True
+
+    for e in comps:
+        if not e in comps_t:
+            elements_identical = False
+    for e in comps_t:
+        if not e in comps:
+            elements_identical = False
+
+    assert elements_identical
 
 
 def GetRxn(con, db, rxn_id):
@@ -145,6 +272,79 @@ def test_GetRxn():
     assert GetRxn(con, db, 'random_reaction') == None
 
 
+def ThreadedGetRxns(con, db, rxn_id_list):
+    """Threaded implementation of GetRxn, taking a list of reaction ids as input."""
+    def Worker():
+        while True:
+            rxn_id = work.get()
+            if rxn_id is None:
+                break
+            sys.stdout.write("\rHandling reaction query '%s'." % str(rxn_id))
+            sys.stdout.flush()
+            output.put(GetRxn(con, db, rxn_id))
+            work.task_done()
+
+    work = queue.Queue()
+    output = queue.Queue()
+
+    threads = []
+    num_workers = 128
+
+    for i in range(num_workers):
+        t = threading.Thread(target=Worker)
+        t.start()
+        threads.append(t)
+
+    for rxn_id in rxn_id_list:
+        work.put(rxn_id)
+
+    # Block until all work is done
+    work.join()
+
+    # Stop workers
+    for i in range(num_workers):
+        work.put(None)
+    for t in threads:
+        t.join()
+
+    # Get the results
+    rxns = []
+
+    while not output.empty():
+        rxns.append(output.get())
+
+    return rxns
+
+def test_ThreadedGetRxns():
+    # Set up connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    rxn_ids = ['R39b3f701d4b0949c38469e31ef675cb7ca1b0fde',
+    'R62503c9b0dab64629bea90753f557c451ad5a9b1',
+    'Rec4bc0816e3e97672c93e81bee581f6710eac00f',
+    'Rc72c92a8ea137cdcc3ada34dc2589553f94faf20',
+    'Rc1015bf465307226440d0692919c708e8d38cfb1',
+    'R47a4684b398ad812c44c5eae69b34972f8a4b624',
+    'R1d52cfafb75c8fc3f5dbdbc681c623a02b4014f7']
+
+    rxns = [con.get_rxns(db, [rxn_id])[0] for rxn_id in rxn_ids]
+
+    rxns_t = ThreadedGetRxns(con, db, rxn_ids)
+
+    elements_identical = True
+
+    for e in rxns:
+        if not e in rxns_t:
+            elements_identical = False
+    for e in rxns_t:
+        if not e in rxns:
+            elements_identical = False
+
+    assert elements_identical
+
+
 def ReadCompounds(filename):
     """Read a file with KEGG compound IDs."""
     sys.stdout.write("\nReading compound ID file...\n")
@@ -187,14 +387,18 @@ def KeggToMineId(kegg_ids):
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
     kegg_id_dict = {}
+    for kegg_comp in ThreadedGetComps(con, db, [x['_id'] for x in ThreadedQuickSearch(con, db, kegg_ids)]):
+        for kegg_id in kegg_comp['DB_links']['KEGG']:
+            kegg_id_dict[kegg_id] = kegg_comp['_id']
     for kegg_id in kegg_ids:
         try:
-            kegg_id_dict[kegg_id] = QuickSearch(con, db, kegg_id)[0]['_id']
-        except IndexError:
+            kegg_comp = kegg_id_dict[kegg_id]
+
+        except KeyError:
             sys.stderr.write("Warning: '%s' is not present in the database.\n" % kegg_id)
             sys.stderr.flush()
             continue
-    print("Done.")
+    print("\nDone.\n")
     return kegg_id_dict
 
 def test_KeggToMineId():
@@ -351,7 +555,7 @@ def test_ExtractCompReactionIds():
 def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
     """Download connected reactions and compounds up to the limits."""
 
-    sys.stdout.write("\nDownloading raw network data...\n")
+    sys.stdout.write("\nDownloading raw network data...\n\n")
     sys.stdout.flush()
 
     # Set up connection
@@ -368,17 +572,24 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
     comps = 0
 
     # First add the starting compounds
-    for comp_id in comp_id_list:
-        comp = GetComp(con, db, comp_id)
-        if comp == None: continue
+    for comp in ThreadedGetComps(con, db, comp_id_list):
+        if comp == None:
+            continue
+        try:
+            comp_id = comp['_id']
+        except KeyError:
+            sys.stderr.write("Warning: '%s' is not a valid compound.\n" % str(comp))
+            sys.stderr.flush()
+            continue
         if not LimitCarbon(comp, C_limit):
             comp_dict[comp_id] = comp # Add compound to dict
             comps += 1
-            sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), comp_id))
-            sys.stdout.flush()
         else:
             sys.stderr.write("Warning: Starting compound '%s' exceeds the C limit and is excluded.\n" % comp_id)
             sys.stderr.flush()
+
+    sys.stdout.write("\nStep %s finished at %s compounds.\n" % (str(steps), str(comps)))
+    sys.stdout.flush()
 
     extended_comp_ids = set()
     rxn_exceeding_C_limit = set()
@@ -390,75 +601,100 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
         # A new step begins
         steps += 1
         print("")
+
         # Get the unexplored compounds by subtracting explored from all that are stored
         unextended_comp_ids = set(comp_dict.keys()) - extended_comp_ids
-        # Go through each unexplored compound
+
+        # Go through each unexplored compound and get a list of the reactions that need to be downloaded
+        rxn_ids_to_download = set()
+
         for comp_id in unextended_comp_ids:
             comp = comp_dict[comp_id] # New compounds are always in the dictionary
             # Get a list of the reactions that the compound is involved in
             rxn_id_list = ExtractCompReactionIds(comp)
             # Go through each reaction
             for rxn_id in rxn_id_list:
-                # Immediately skip reactions that are known to exceed the C limit
-                if rxn_id in rxn_exceeding_C_limit: continue
-                # Only download new reactions
-                try:
-                    # Already explored reactions are in the reaction dictionary
-                    # No further manipulation of the reaction is needed
-                    rxn = rxn_dict[rxn_id]
-                except KeyError:
-                    # We're now exploring a new reaction
-                    rxn = GetRxn(con, db, rxn_id)
-                    if rxn == None: continue
-                    rxn_comp_ids = ExtractReactionCompIds(rxn)
-                    # We will keep track of newly discovered compounds
-                    new_rxn_comp_ids = []
-                    for rxn_comp_id in rxn_comp_ids:
-                        try:
-                            rxn_comp = comp_dict[rxn_comp_id]
-                        except KeyError:
-                            # We're now looking at a compound that is currently not in the comp_dict
-                            if rxn_comp_id in comp_exceeding_C_limit:
-                                # The compound has previously been identified as exceeding the C limit
-                                rxn_exceeding_C_limit.add(rxn_id)
-                                # We don't want to explore this reaction further and thus break
-                                break
-                            # The compound has not been encountered before
-                            # Let's check if it is in the cache before downloading it
-                            try:
-                                rxn_comp = comp_cache[rxn_comp_id]
-                            except KeyError:
-                                rxn_comp = GetComp(con, db, rxn_comp_id)
-                            if rxn_comp == None: continue
-                            if LimitCarbon(rxn_comp, C_limit):
-                                # The compound exceeds the limit and both compound and reaction
-                                # are added to the sets of known transgressors
-                                comp_exceeding_C_limit.add(rxn_comp_id)
-                                rxn_exceeding_C_limit.add(rxn_id)
-                                # We don't want to explore this reaction further and thus break
-                                break
-                            # The compound passed the C limit
-                            # Add it to the comp_cache and the list of new compounds
-                            comp_cache[rxn_comp_id] = rxn_comp
-                            new_rxn_comp_ids.append(rxn_comp_id)
-                    # We've made it through the compounds of the reaction
-                    # Let's ensure the reaction did not exceed the C limit
-                    if rxn_id in rxn_exceeding_C_limit: continue
-                    # The reaction did not exceed the C limit, so let's harvest the new compounds
-                    for new_rxn_comp_id in new_rxn_comp_ids:
-                        comp_dict[new_rxn_comp_id] = comp_cache[new_rxn_comp_id]
-                        comps += 1
-                        sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), new_rxn_comp_id))
-                        sys.stdout.flush()
-                        # Stop at compound limit here
-                        if comps >= comp_limit:
-                            print("Done.")
-                            return (comp_dict, rxn_dict)
-                    # Finally, the new reaction is welcome in the reaction dictionary
-                    rxn_dict[rxn_id] = rxn
-            # All reactions of the compound have been explored
-            extended_comp_ids.add(comp_id)
-    print("Done.")
+                # Reactions that are not in the reaction dictionary
+                # and do not exceed the C limit will be downloaded and further explored
+                if rxn_id not in rxn_dict.keys() and rxn_id not in rxn_exceeding_C_limit:
+                    rxn_ids_to_download.add(rxn_id)
+
+        # Download new rxns
+        new_rxns = ThreadedGetRxns(con, db, list(rxn_ids_to_download))
+        print("")
+
+        # Go through the downloaded reactions and get a list of compounds to download
+        comp_ids_to_download = set()
+
+        for rxn in new_rxns:
+            if rxn == None: continue
+            rxn_comp_ids = ExtractReactionCompIds(rxn)
+            for rxn_comp_id in rxn_comp_ids:
+                # Compounds that are not in the reaction dictionary
+                # and do not exceed the C limit will be downloaded and further explored
+                if rxn_comp_id not in comp_dict.keys() and rxn_comp_id not in comp_cache.keys() and rxn_comp_id not in comp_exceeding_C_limit:
+                    comp_ids_to_download.add(rxn_comp_id)
+
+        # Download new compounds
+        new_comps = ThreadedGetComps(con, db, list(comp_ids_to_download))
+
+        # Expand the comp_cache with the new compounds
+        for comp in new_comps:
+            if comp == None: continue
+            try:
+                comp_id = comp['_id']
+            except KeyError:
+                sys.stderr.write("Warning: Compound '%s' lacks an ID and will be skipped.\n" % str(comp))
+                sys.stderr.flush()
+                continue
+            comp_cache[comp_id] = comp
+
+        # Go through each new reaction and its compounds
+        for rxn in new_rxns:
+            new_rxn_comp_ids = set()
+            if rxn == None: continue
+            try:
+                rxn_id = rxn['_id']
+            except KeyError:
+                sys.stderr.write("Warning: Reaction '%s' lacks an ID and will be skipped.\n" % str(rxn))
+                sys.stderr.flush()
+                continue
+            rxn_comp_ids = ExtractReactionCompIds(rxn)
+            for rxn_comp_id in rxn_comp_ids:
+                if rxn_comp_id not in comp_dict.keys():
+                    # The compound has not been added to the compound dict
+                    try:
+                        rxn_comp = comp_cache[rxn_comp_id]
+                        if LimitCarbon(rxn_comp, C_limit):
+                            # The compound and the reaction both exceed the C limit
+                            comp_exceeding_C_limit.add(rxn_comp_id)
+                            rxn_exceeding_C_limit.add(rxn_id)
+                            # We don't want to explore this reaction further and thus break
+                            break
+                        # The compound passed the C limit
+                        new_rxn_comp_ids.add(rxn_comp_id)
+                    except KeyError:
+                        # The compound was never downloaded
+                        continue
+            # We've made it through the compounds of the reaction
+            if rxn_id in rxn_exceeding_C_limit:
+                continue
+            # The reaction did not exceed the C limit, so let's harvest the new compounds
+            rxn_dict[rxn_id] = rxn # The reaction should also be placed in the reaction dictionary
+            for new_rxn_comp_id in new_rxn_comp_ids:
+                comp_dict[new_rxn_comp_id] = comp_cache[new_rxn_comp_id]
+                comps += 1
+                # Stop at compound limit here
+                if comps >= comp_limit:
+                    sys.stdout.write("\nStep %s finished at %s compounds.\n" % (str(steps), str(comps)))
+                    sys.stdout.flush()
+                    print("\nDone.")
+                    return (comp_dict, rxn_dict)
+        # All reactions in the current step have been explored
+        extended_comp_ids = extended_comp_ids.union(unextended_comp_ids)
+        sys.stdout.write("\nStep %s finished at %s compounds.\n" % (str(steps), str(comps)))
+        sys.stdout.flush()
+    print("\nDone.")
     return (comp_dict, rxn_dict)
 
 def test_GetRawNetwork():
