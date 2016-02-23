@@ -448,7 +448,7 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
                     for new_rxn_comp_id in new_rxn_comp_ids:
                         comp_dict[new_rxn_comp_id] = comp_cache[new_rxn_comp_id]
                         comps += 1
-                        sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), comp_id))
+                        sys.stdout.write("\rStep %s: Compound %s ('%s')..." % (str(steps), str(comps), new_rxn_comp_id))
                         sys.stdout.flush()
                         # Stop at compound limit here
                         if comps >= comp_limit:
@@ -544,6 +544,11 @@ def AddCompoundNode(graph, compound, start_comp_ids):
     else:
         start = False
     graph.add_node(N, type='c', mid=mid, start=start)
+    # Also add a mid to node entry in the graph dictionary
+    try:
+        graph.graph['cmid2node'][mid] = N
+    except KeyError:
+        graph.graph['cmid2node'] = {mid : N}
     return graph
 
 def test_AddCompoundNode():
@@ -567,6 +572,7 @@ def test_AddCompoundNode():
     assert G1.node[1]['start'] == G2.node[1]['start'] == True
     assert G1.node[2]['start'] == G2.node[2]['start'] == False
     assert G1.nodes(data=True) == G2.nodes(data=True)
+    assert G1.graph['cmid2node'] == {'Xf5dc8599a48d0111a3a5f618296752e1b53c8d30':1,'C38a97a9f962a32b984b1702e07a25413299569ab':2}
 
 
 def CheckConnection(minetwork, c_node, r_node):
@@ -651,15 +657,20 @@ def AddQuadReactionNode(graph, rxn):
     rr = set([])
     pr = set([])
 
-    for node in graph.nodes():
-        if graph.node[node]['type'] != 'c':
-            continue
-        if graph.node[node]['mid'] in reactants_f:
+    for c_mid in reactants_f:
+        try:
+            node = graph.graph['cmid2node'][c_mid]
             rf.add(node)
             pr.add(node)
-        if graph.node[node]['mid'] in products_f:
+        except KeyError:
+            pass
+    for c_mid in products_f:
+        try:
+            node = graph.graph['cmid2node'][c_mid]
             pf.add(node)
             rr.add(node)
+        except KeyError:
+            pass
 
     # Create the reaction nodes
     N = len(graph.nodes()) + 1
@@ -713,6 +724,10 @@ def test_AddQuadReactionNode():
     G1.add_node(2, type='c', mid=con.get_comps(db, [r_mid[1]])[0]['_id'], start=True) # r_mid[1] is ATP; not connected
     G1.add_node(3, type='c', mid=con.get_comps(db, [p_mid[0]])[0]['_id'], start=False) # p_mid[0] is connected
 
+    G1.graph['cmid2node'] = {}
+    for node in G1.nodes():
+        G1.graph['cmid2node'][G1.node[node]['mid']] = node
+
     rxn_id = 'R04759e864c86cfd0eaeb079404d5f18dae6c7227'
 
     G1.add_node(4, type='rf', mid=rxn_id, c=r_node_c) # Forward (intended) direction reactants
@@ -738,6 +753,11 @@ def test_AddQuadReactionNode():
     G2.add_node(1, type='c', mid=con.get_comps(db, [r_mid[0]])[0]['_id'], start=False)
     G2.add_node(2, type='c', mid=con.get_comps(db, [r_mid[1]])[0]['_id'], start=True)
     G2.add_node(3, type='c', mid=con.get_comps(db, [p_mid[0]])[0]['_id'], start=False)
+
+    G2.graph['cmid2node'] = {}
+    for node in G2.nodes():
+        G2.graph['cmid2node'][G2.node[node]['mid']] = node
+
     G2 = AddQuadReactionNode(G2, rxn)
 
     assert nx.is_isomorphic(G1, G2)
@@ -754,6 +774,11 @@ def test_AddQuadReactionNode():
     G3.add_node(2,mid='C2',type='c')
     G3.add_node(3,mid='C3',type='c')
     G3.add_node(4,mid='X1',type='c')
+
+    G3.graph['cmid2node'] = {}
+    for node in G3.nodes():
+        G3.graph['cmid2node'][G3.node[node]['mid']] = node
+
     G3 = AddQuadReactionNode(G3, r1)
     G3 = AddQuadReactionNode(G3, r2)
 
