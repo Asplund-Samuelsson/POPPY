@@ -11,10 +11,10 @@ from collections import defaultdict as dd
 from itertools import repeat
 
 # Define functions
-def CountRxns(path):
-    """Count the number of unique reactions in a path graph."""
+def CountRxns(network):
+    """Count the number of unique reactions in a network."""
     rxns = set()
-    for node in path.nodes(data=True):
+    for node in network.nodes(data=True):
         if node[1]['type'] != 'c':
             rxns.add(node[1]['mid'])
     return len(rxns)
@@ -51,43 +51,6 @@ def test_CountRxns():
     assert CountRxns(p4) == 1
 
 
-def TrimNetwork(network):
-    """Trims the fat off a network in order to improve multiprocessing memory usage."""
-    del network.graph['mine_data']
-
-def test_TrimNetwork():
-    # Set up testing networks
-    G = nx.DiGraph()
-    Y = nx.DiGraph()
-    p1 = [1,2,3]
-    p2 = [1,5,6]
-    p3 = [5,7,4,2]
-    for p in [p1,p2,p3]:
-        G.add_path(p)
-        Y.add_path(p)
-    for n in G.nodes():
-        G.node[n]['mid'] = 'dummy'
-        Y.node[n]['mid'] = 'dummy'
-
-    G.graph['mine_data'] = {'R1':{'_id':'R1'}}
-    Y.graph['mine_data'] = {'R1':{'_id':'R1'}}
-
-    # Trim G but not Y
-    TrimNetwork(G)
-
-    # Topography should be the same
-    assert nx.is_isomorphic(G, Y)
-
-    # Data should be gone from G
-    try:
-        x = G.graph['mine_data']
-        d = True
-    except KeyError:
-        d = False
-
-    assert d == False
-
-
 def FindStartCompNodes(network):
     """Returns a list starting compound nodes in a MINE network."""
     start_comp_nodes = []
@@ -114,10 +77,15 @@ def FindValidReactantNodes(network, comp_node_set=set([])):
 
     valid_reactant_nodes = set([])
 
+    n = 0
+
     for node in network.nodes():
         if network.node[node]['type'] in {'rf','rr'}:
             c = network.node[node]['c']
             if c.issubset(comp_node_set):
+                n += 1
+                sys.stdout.write("Identifying reachable reactant nodes: %s...\r" % str(n))
+                sys.stdout.flush()
                 valid_reactant_nodes.add(node)
 
     return valid_reactant_nodes
@@ -151,9 +119,13 @@ def test_FindValidReactantNodes():
 
 def ExpandValidCompoundSet(network, valid_reactant_nodes=set([]), comp_node_set=set([])):
     """Expands the valid compound set with products of valid reactant nodes."""
+    n = 0
     if comp_node_set == set([]):
         comp_node_set = FindStartCompNodes(network)
     else:
+        n += 1
+        sys.stdout.write("Expanding compound set: %s...\r" % str(n))
+        sys.stdout.flush()
         for r_node in valid_reactant_nodes:
             p_node = network.successors(r_node)[0]
             comp_node_set = comp_node_set.union(network.node[p_node]['c'])
@@ -217,27 +189,26 @@ def DistanceToOrigin(network, N=-1):
     prev_vrn = list(valid_reactant_nodes)
     prev_vcn = list(valid_compound_nodes)
 
+    # Start with no new valid reactant nodes
+    new_vrn = set([])
+
     while True:
 
         # Valid product nodes will be connected at the start of an expansion cycle
         # They are however in principle identified in the previous cycle via valid reactant nodes
-        try:
-            for r_node in new_vrn:
-                p_node = network.successors(r_node)[0]
-                network.node[p_node]['dist'] = n
-                node_type = network.node[p_node]['type']
-                if node_type == 'pf':
-                    pf += 1
-                if node_type == 'pr':
-                    pr += 1
-        except NameError:
-            # new_vrn is not present in the first round
-            pass
+        for r_node in new_vrn:
+            p_node = network.successors(r_node)[0]
+            network.node[p_node]['dist'] = n
+            node_type = network.node[p_node]['type']
+            if node_type == 'pf':
+                pf += 1
+            if node_type == 'pr':
+                pr += 1
 
         # Expand the valid compound set
         # When n = 0, this means the starting compounds
         # When n > 0, the valid compound set will be expanded
-        new_vcn = ExpandValidCompoundSet(network, valid_reactant_nodes, valid_compound_nodes) - valid_compound_nodes
+        new_vcn = ExpandValidCompoundSet(network, new_vrn, valid_compound_nodes) - valid_compound_nodes
         valid_compound_nodes = new_vcn.union(valid_compound_nodes)
 
         new_vrn = FindValidReactantNodes(network, valid_compound_nodes) - valid_reactant_nodes
@@ -397,292 +368,79 @@ def test_PruneNetwork():
     assert set(H.edges()) == set(Z.edges())
 
 
-def DetectLoops(path):
-    """Detect reaction loops, which induce 'bootstrapping', in a path."""
-    rxns = dd(int)
-    for node in path:
-        if node[0] != 'c':
-            rxns[node[1]] +=1
-    for n in rxns.values():
-        if n > 2:
-            return True
-    return False
+def FindPaths(network, start_node, target_node, reaction_limit):
+    """
+    Find all simple paths from an origin reactant node to a target compound node,
+    limiting the total number of reactions.
+    """
 
-def test_DetectLoops():
-    p1 = [('c','C1'), ('rf','R1'), ('pf','R1'), ('c','C2')]
-    p2 = [('c','C1'), ('rf','R1'), ('pf','R1'), ('c','C2'), ('rr','R1'), ('pr','R1'), ('c','C3')]
-    assert DetectLoops(p2)
-    assert not DetectLoops(p1)
-
-
-def FindPaths(network, start_id, target_id, reaction_limit):
-    """Find all simple paths from a starting compound to a target compound,
-    limiting the total number of reactions."""
-    start_node = ('c', start_id)
-    target_node = ('c', target_id)
     paths = []
+
+    if network.node[start_node]['type'] not in {'rf','rr'} or network.node[target_node]['type'] != 'c':
+        sys.stderr.write("Warning: Incorrect type detected in start and target nodes '%s' and '%s'.\n" % (str(start_node), str(target_node)))
+        sys.stderr.flush()
+        return paths
+
     if nx.has_path(network, start_node, target_node):
-        for path in nx.shortest_simple_paths(network, start_node, target_node, weight='weight'):
-            if CountRxns(path) > reaction_limit:
+        for path in nx.shortest_simple_paths(network, start_node, target_node):
+            if len(path)/3 > reaction_limit:
+                # Dividing the path length by three gives the number of reaction steps
                 break
-            if not DetectLoops(path):
-                # Paths that loop through reactions are not allowed
+            if nx.is_directed_acyclic_graph(network.subgraph(path)):
+                # Only paths that represent an acyclic sub-network are allowed
+                # Paths may not fold back onto themselves
                 paths.append(path)
+
     return paths
 
-def test_FindPaths():
+def test_FindPaths(capsys):
 
     # Set up testing network
-    p1 = [('c','C1'), ('rf','R1'), ('pf','R1'), ('c','C2')]
-    p2 = [('c','C2'), ('rf','R2'), ('pf','R2'), ('c','C3')]
-    p3 = [('c','C3'), ('rr','R2'), ('pr','R2'), ('c','C2')]
-    p4 = [('c','C2'), ('rr','R1'), ('pr','R1'), ('c','C1')]
-    p5 = [('c','C1'), ('rf','R3'), ('pf','R3'), ('c','C4')]
-    p6 = [('c','C4'), ('rf','R4'), ('pf','R4'), ('c','C2')]
-    p7 = [('c','C4'), ('rr','R3'), ('pr','R3'), ('c','C1')]
-    p8 = [('c','C2'), ('rr','R4'), ('pr','R4'), ('c','C4')]
     G = nx.DiGraph()
-    for p in [p1,p2,p3,p4,p5,p6,p7,p8]:
-        G.add_path(p)
-    for e in G.edges():
-        if e[0][0] == 'c' or e[1][0] == 'c':
-            G.edge[e[0]][e[1]]['weight'] = 0
-        else:
-            G.edge[e[0]][e[1]]['weight'] = 1
+    G.add_nodes_from(range(1,5), type='c')
+    G.add_nodes_from(range(5,18,4), type='rf')
+    G.add_nodes_from(range(6,19,4), type='pf')
+    G.add_nodes_from(range(7,20,4), type='rr')
+    G.add_nodes_from(range(8,21,4), type='pr')
+    G.add_path([1,5,6,2,9,10,13,14,4,15,16,3,11,12,2,8,7,1])
+    G.add_path([2,17,18,4,19,20,2])
 
     # Perform testing
-    assert FindPaths(G, 'C1', 'C3', 3)[1][3] == ('c','C4')
-    assert len(FindPaths(G, 'C1', 'C3', 10)) == 2
-    assert len(FindPaths(G, 'C1', 'C3', 2)) == 1
+    assert FindPaths(G, 5, 1, 5) == [] # Cyclicity
+    assert FindPaths(G, 5, 4, 1) == [] # Path length limit 1
+    assert FindPaths(G, 5, 4, 2) == [[5,6,2,17,18,4]] # Path length limit 2
+    assert len(FindPaths(G, 5, 4, 3)) == 2 # Path length limit 3
+    assert FindPaths(G, 13, 2, 2) == [[13,14,4,19,20,2]] # Different starting point + Cyclicity
+    assert FindPaths(G, 1, 4, 5) == []
+    out, err = capsys.readouterr()
+    assert err == "Warning: Incorrect type detected in start and target nodes '1' and '4'.\n"
 
 
-def GetStartCompIds(network):
-    """Lists the IDs of all starting compounds in the network."""
-    start_comp_ids = []
-    for node in network.nodes(data=True):
-        if node[0][0] == 'c':
-            if node[1]['start']:
-                start_comp_ids.append(node[0][1])
-    return start_comp_ids
+def SortPaths(paths):
+    """Sort paths into bins based on their root - the product node at position -2."""
+    path_dict = {}
+    for path in paths:
+        root_node = path[-2]
+        try:
+            path_dict[root_node].append(path)
+        except KeyError:
+            path_dict[root_node] = [path]
+    return path_dict
 
-def test_GetStartCompIds():
-    G = nx.DiGraph()
-    G.add_nodes_from([('c','C1'),('c','C2'),('c','C3')], start=False)
-    G.add_nodes_from([('rf','R1'),('pf','R1')])
-    G.node[('c','C2')]['start'] = True
-    assert len(GetStartCompIds(G)) == 1
-    assert GetStartCompIds(G)[0] == 'C2'
+def test_SortPaths():
+    paths = [
+    [1,2,3,4,5,6,7,8,9445],
+    [10,20,30,40,50,9445],
+    [60,70,80,7,8,9445],
+    [125,92,119,3810,393,291,40,50,9445],
+    [111,222,333,444,555,666,777,888,9445]
+    ]
 
-
-def CheckDependence(path, network):
-    """Returns IDs of non-starting compounds among any of the reactants along the path."""
-    dependencies = []
-    for n in path:
-        if n[0] in {'rf','rr'}:
-            for c in network.node[n]['c']:
-                try:
-                    # The compound is a dependency if it is not in the direct path and not a starting compound
-                    if not network.node[('c',c)]['start'] and ('c',c) not in path:
-                        dependencies.append(c)
-                except KeyError:
-                    continue
-    return dependencies
-
-
-def test_CheckDependence():
-
-    # Set up testing network
-    p1 = [('c','C1'), ('rf','R1'), ('pf','R1'), ('c','C2')]
-    p1b = [('c','C5'), ('rf','R1'), ('pf','R1'), ('c','C2')]
-    p2 = [('c','C2'), ('rr','R1'), ('pr','R1'), ('c','C1')]
-    p2b = [('c','C2'), ('rr','R1'), ('pr','R1'), ('c','C5')]
-    p3 = [('c','C1'), ('rf','R3'), ('pf','R3'), ('c','C4')]
-    p4 = [('c','C4'), ('rr','R3'), ('pr','R3'), ('c','C1')]
-    p5 = [('c','C4'), ('rf','R4'), ('pf','R4'), ('c','C6')]
-    p5b = [('c','C6'), ('rr','R4'), ('pr','R4'), ('c','C4')]
-    G = nx.DiGraph()
-    for p in [p1,p1b,p2,p2b,p3,p4,p5,p5b]:
-        G.add_path(p)
-    G.node[('rf','R1')]['c'] = set(['C1','C5'])
-    G.node[('pf','R1')]['c'] = set(['C2'])
-    G.node[('rr','R1')]['c'] = set(['C2'])
-    G.node[('pr','R1')]['c'] = set(['C1','C5'])
-    G.node[('rf','R3')]['c'] = set(['C1'])
-    G.node[('pf','R3')]['c'] = set(['C3'])
-    G.node[('rr','R3')]['c'] = set(['C3'])
-    G.node[('pr','R3')]['c'] = set(['C1'])
-    G.node[('rf','R4')]['c'] = set(['C4'])
-    G.node[('pf','R4')]['c'] = set(['C6'])
-    G.node[('rr','R4')]['c'] = set(['C6'])
-    G.node[('pr','R4')]['c'] = set(['C4'])
-
-    for n in G.nodes():
-        if n[0] == 'c':
-            G.node[n]['start'] = False
-
-    G.node[('c','C1')]['start'] = True
-
-    assert set(CheckDependence(p1, G)) == set(['C5'])
-    assert set(CheckDependence(p2, G)) == set([])
-    assert set(CheckDependence(p3, G)) == set([])
-    assert set(CheckDependence(p3[0:3] + p5, G)) == set([])
-
-
-def EnumeratePaths(network, start_id, target_id, reaction_limit):
-    """Enumerate branched pathways from the starting compound to the target compound,
-    limiting the total number of reactions. Returns a graph describing the pathway."""
-    start_comp_ids = GetStartCompIds(network)
-    # Recursively? find paths
-    path_graphs = []
-    for path in FindPaths(network, start_id, target_id, reaction_limit):
-        reaction_number = 0
-        path_len = CountRxns(path)
-        reaction_number += path_len
-
-    return None
-
-def test_EnumeratePaths():
-
-    # Construct testing network
-    G = nx.DiGraph()
-
-    p1 = [('c','C1'),('rf','R1'),('pf','R1'),('c','C3'),('rf','R3'),('pf','R3'),('c','C5')]
-    p2 = [('c','C5'),('rr','R3'),('pr','R3'),('c','C3'),('rr','R1'),('pr','R1'),('c','C1')]
-    p3 = [('c','C2'),('rf','R2'),('pf','R2'),('c','C4'),('rf','R3'),('pf','R3'),('c','C5')]
-    p4 = [('c','C5'),('rr','R3'),('pr','R3'),('c','C4'),('rr','R2'),('pr','R2'),('c','C2')]
-    p5 = [('c','C6'),('rf','R4'),('pf','R4'),('c','C5')]
-    p6 = [('c','C5'),('rr','R4'),('pr','R4'),('c','C6')]
-    for p in [p1,p2,p3,p4,p5,p6]:
-        G.add_path(p)
-
-    G.node[('rf','R1')]['c'] = set(['C1'])
-    G.node[('pf','R1')]['c'] = set(['C3'])
-    G.node[('rr','R1')]['c'] = set(['C3'])
-    G.node[('pr','R1')]['c'] = set(['C1'])
-
-    G.node[('rf','R2')]['c'] = set(['C2'])
-    G.node[('pf','R2')]['c'] = set(['C4'])
-    G.node[('rr','R2')]['c'] = set(['C4'])
-    G.node[('pr','R2')]['c'] = set(['C2'])
-
-    G.node[('rf','R3')]['c'] = set(['C3','C4'])
-    G.node[('pf','R3')]['c'] = set(['C5'])
-    G.node[('rr','R3')]['c'] = set(['C5'])
-    G.node[('pr','R3')]['c'] = set(['C3','C4'])
-
-    G.node[('rf','R4')]['c'] = set(['C6'])
-    G.node[('pf','R4')]['c'] = set(['C5'])
-    G.node[('rr','R4')]['c'] = set(['C5'])
-    G.node[('pr','R4')]['c'] = set(['C6'])
-
-    G.node[('c','C1')]['start'] = True
-    G.node[('c','C2')]['start'] = True
-    G.node[('c','C3')]['start'] = False
-    G.node[('c','C4')]['start'] = False
-    G.node[('c','C5')]['start'] = False
-    G.node[('c','C6')]['start'] = False
-
-    for e in G.edges():
-        if e[0][0] == 'c' or e[1][0] == 'c':
-            G.edge[e[0]][e[1]]['weight'] = 0
-        else:
-            G.edge[e[0]][e[1]]['weight'] = 1
-
-    for n in G.nodes():
-        G.node[n]['data'] = {'_id':n[1]}
-
-    path_graph_C1_C5 = nx.compose(nx.subgraph(G,p1), nx.subgraph(G,p3))
-
-    path_graph_C2_C5 = path_graph_C1_C5 # Both starting compounds should yield the same graph
-
-    path_graph_C1_C6 = nx.compose(path_graph_C1_C5, nx.subgraph(G,p6))
-
-    assert nx.is_isomorphic(EnumeratePaths(G, 'C1', 'C5', 5)[0], path_graph_C1_C5)
-    assert nx.is_isomorphic(EnumeratePaths(G, 'C2', 'C5', 5)[0], path_graph_C2_C5)
-    assert nx.is_isomorphic(EnumeratePaths(G, 'C1', 'C6', 5)[0], path_graph_C1_C6)
-    assert len(EnumeratePaths(G, 'C1', 'C6', 4)) == 1
-    assert len(EnumeratePaths(G, 'C1', 'C6', 3)) == 0
-
-
-def GetDirectIndependentPaths(network, start_id, target_id, reaction_limit):
-    """Lists all paths that directly connect the starting compound to a target."""
-    path_graphs = []
-    rejected = '!'
-    for path in FindPaths(network, start_id, target_id, reaction_limit):
-        if len(CheckDependence(path, network)) == 0:
-            path_graphs.append(nx.subgraph(network, path))
-            n = CountRxns(path)
-            if n < 10:
-                num = str(n)
-            else:
-                num = '*'
-            sys.stdout.write(num)
-            sys.stdout.flush()
-        else:
-            sys.stdout.write(rejected)
-            sys.stdout.flush()
-        rejected = '.'
-    return path_graphs
-
-def test_GetDirectIndependentPaths():
-    # Construct testing network
-    G = nx.DiGraph()
-
-    p1 = [('c','C1'),('rf','R1'),('pf','R1'),('c','C3'),('rf','R3'),('pf','R3'),('c','C5')]
-    p2 = [('c','C5'),('rr','R3'),('pr','R3'),('c','C3'),('rr','R1'),('pr','R1'),('c','C1')]
-    p3 = [('c','C2'),('rf','R2'),('pf','R2'),('c','C4'),('rf','R3'),('pf','R3'),('c','C5')]
-    p4 = [('c','C5'),('rr','R3'),('pr','R3'),('c','C4'),('rr','R2'),('pr','R2'),('c','C2')]
-    p5 = [('c','C6'),('rf','R4'),('pf','R4'),('c','C5')]
-    p6 = [('c','C5'),('rr','R4'),('pr','R4'),('c','C6')]
-    for p in [p1,p2,p3,p4,p5,p6]:
-        G.add_path(p)
-
-    G.node[('rf','R1')]['c'] = set(['C1'])
-    G.node[('pf','R1')]['c'] = set(['C3'])
-    G.node[('rr','R1')]['c'] = set(['C3'])
-    G.node[('pr','R1')]['c'] = set(['C1'])
-
-    G.node[('rf','R2')]['c'] = set(['C2'])
-    G.node[('pf','R2')]['c'] = set(['C4'])
-    G.node[('rr','R2')]['c'] = set(['C4'])
-    G.node[('pr','R2')]['c'] = set(['C2'])
-
-    G.node[('rf','R3')]['c'] = set(['C3','C4'])
-    G.node[('pf','R3')]['c'] = set(['C5'])
-    G.node[('rr','R3')]['c'] = set(['C5'])
-    G.node[('pr','R3')]['c'] = set(['C3','C4'])
-
-    G.node[('rf','R4')]['c'] = set(['C6'])
-    G.node[('pf','R4')]['c'] = set(['C5'])
-    G.node[('rr','R4')]['c'] = set(['C5'])
-    G.node[('pr','R4')]['c'] = set(['C6'])
-
-    G.node[('c','C1')]['start'] = True
-    G.node[('c','C2')]['start'] = True
-    G.node[('c','C3')]['start'] = False
-    G.node[('c','C4')]['start'] = False
-    G.node[('c','C5')]['start'] = False
-    G.node[('c','C6')]['start'] = False
-
-    for e in G.edges():
-        if e[0][0] == 'c' or e[1][0] == 'c':
-            G.edge[e[0]][e[1]]['weight'] = 0
-        else:
-            G.edge[e[0]][e[1]]['weight'] = 1
-
-    for n in G.nodes():
-        G.node[n]['data'] = {'_id':n[1]}
-
-    path_C1_C3 = nx.subgraph(G, p1[0:4])
-    path_C1_C4 = nx.subgraph(G, p1 + p4[1:4]) # "Bootstrapped" path; C5 cannot exist without C4
-    path_C5_C6 = nx.subgraph(G, p6) # C5 is non-starting, but included in path
-
-    assert nx.is_isomorphic(path_C1_C3, GetDirectIndependentPaths(G, 'C1', 'C3', 3)[0])
-    assert GetDirectIndependentPaths(G, 'C1', 'C4', 3) == []
-    assert nx.is_isomorphic(path_C5_C6, GetDirectIndependentPaths(G, 'C5', 'C6', 5)[0])
-    assert set(path_C5_C6.nodes()) == set(GetDirectIndependentPaths(G, 'C5', 'C6', 5)[0].nodes())
-
-
+    assert [len(b) for b in [SortPaths(paths)[node] for node in [8,50,888]]] == [2,2,1]
+    assert [paths[0],paths[2],paths[1],paths[3],paths[4]] == [x for y in [SortPaths(paths)[node] for node in [8,50,888]] for x in y]
+    assert SortPaths(paths)[888][0] == paths[4]
+    assert SortPaths(paths)[8][0] == paths[0]
+    assert len(SortPaths(paths)) == 3
 
 # Main code block
 def main(infile_name, compound, reaction_limit, n_procs, simple, outfile_name):
