@@ -7,10 +7,16 @@ import sys
 import argparse
 import pickle
 import multiprocessing as mp
+from multiprocessing.managers import BaseManager
 from collections import defaultdict as dd
 from itertools import repeat
+import time
 
 # Define functions
+def Chunks(lst,n):
+    return [ lst[i::n] for i in range(n) ]
+
+
 def CountRxns(network):
     """Count the number of unique reactions in a network."""
     rxns = set()
@@ -69,24 +75,46 @@ def test_FindStartCompNodes():
     assert FindStartCompNodes(G) == set([1])
 
 
-def FindValidReactantNodes(network, comp_node_set=set([])):
+def FindValidReactantNodes(network, proc_num=1, comp_node_set=set(), force_parallel=False):
     """Find and return all reactant nodes that are valid given the supplied compound node set."""
     # If the set is empty, use starting compounds as the compound node set
-    if comp_node_set == set([]):
+    if comp_node_set == set():
         comp_node_set = FindStartCompNodes(network)
 
-    valid_reactant_nodes = set([])
+    # Define the Worker
+    def Worker(work):
+        results = set()
+        for node in work:
+            if network.node[node]['type'] in {'rf','rr'}:
+                c = network.node[node]['c']
+                if c.issubset(comp_node_set):
+                    results.add(node)
+        output.extend(list(results))
 
-    n = 0
+    # Only go parallel if there are 5k or more items
+    if len(network.nodes()) < 5000 and not force_parallel:
+        output = []
+        Worker(network.nodes())
+        valid_reactant_nodes = set(output)
 
-    for node in network.nodes():
-        if network.node[node]['type'] in {'rf','rr'}:
-            c = network.node[node]['c']
-            if c.issubset(comp_node_set):
-                n += 1
-                sys.stdout.write("Identifying reachable reactant nodes: %s...\r" % str(n))
-                sys.stdout.flush()
-                valid_reactant_nodes.add(node)
+    else:
+        with mp.Manager() as manager:
+            # Initialize output list in manager
+            output = manager.list()
+
+            # Initialize processes
+            procs = []
+            for work in Chunks(network.nodes(), proc_num):
+                p = mp.Process(target=Worker, args=(work,))
+                procs.append(p)
+                p.start()
+
+            # Stop workers
+            for p in procs:
+                p.join()
+
+            # Get the results
+            valid_reactant_nodes = set(output)
 
     return valid_reactant_nodes
 
@@ -111,24 +139,59 @@ def test_FindValidReactantNodes():
     G.add_path([8,11,12,1])
     G.add_edge(12,5)
     start_comps = FindStartCompNodes(G)
-    assert FindValidReactantNodes(G, start_comps) == set([2])
-    assert FindValidReactantNodes(G) == set([2])
-    assert FindValidReactantNodes(G, set([1,5])) == set([2,6])
-    assert FindValidReactantNodes(G, set([8])) == set([11])
+
+    assert FindValidReactantNodes(G, 4, start_comps) == set([2])
+    assert FindValidReactantNodes(G, 4, start_comps, force_parallel=True) == set([2])
+
+    assert FindValidReactantNodes(G, 4) == set([2])
+    assert FindValidReactantNodes(G, 4, force_parallel=True) == set([2])
+
+    assert FindValidReactantNodes(G, 4, set([1,5])) == set([2,6])
+    assert FindValidReactantNodes(G, 4, set([1,5]), force_parallel=True) == set([2,6])
+
+    assert FindValidReactantNodes(G, 4, set([8])) == set([11])
+    assert FindValidReactantNodes(G, 4, set([8]), force_parallel=True) == set([11])
 
 
-def ExpandValidCompoundSet(network, valid_reactant_nodes=set([]), comp_node_set=set([])):
+def ExpandValidCompoundSet(network, proc_num=1, valid_reactant_nodes=set(), comp_node_set=set(), force_parallel=False):
     """Expands the valid compound set with products of valid reactant nodes."""
-    n = 0
-    if comp_node_set == set([]):
+    if comp_node_set == set():
         comp_node_set = FindStartCompNodes(network)
     else:
-        n += 1
-        sys.stdout.write("Expanding compound set: %s...\r" % str(n))
-        sys.stdout.flush()
-        for r_node in valid_reactant_nodes:
-            p_node = network.successors(r_node)[0]
-            comp_node_set = comp_node_set.union(network.node[p_node]['c'])
+        # Define the Worker
+        def Worker(work):
+            compounds = set()
+            for r_node in work:
+                p_node = network.successors(r_node)[0]
+                products = network.node[p_node]['c']
+                compounds = compounds.union(products)
+            output.extend(compounds)
+
+        # Only go parallel if there are 5k or more items
+        if len(valid_reactant_nodes) < 5000  and not force_parallel:
+            output = []
+            Worker(valid_reactant_nodes)
+            comp_node_set = comp_node_set.union(set(output))
+
+        else:
+            with mp.Manager() as manager:
+                # Initialize output list in manager
+                output = manager.list()
+
+                # Initialize processes
+                procs = []
+                for work in Chunks(list(valid_reactant_nodes), proc_num):
+                    p = mp.Process(target=Worker, args=(work,))
+                    procs.append(p)
+                    p.start()
+
+                # Stop workers
+                for p in procs:
+                    p.join()
+
+                # Get results
+                comp_node_set = comp_node_set.union(set(output))
+
     return comp_node_set
 
 def test_ExpandValidCompoundSet():
@@ -151,13 +214,21 @@ def test_ExpandValidCompoundSet():
     G.add_node(12,type='pr',c={1,5})
     G.add_path([8,11,12,1])
     G.add_edge(12,5)
+
     assert ExpandValidCompoundSet(G) == set([1])
-    assert ExpandValidCompoundSet(G, set([2,9]), set([1,4])) == set([1,4])
-    assert ExpandValidCompoundSet(G, FindValidReactantNodes(G, set([8])), set([8])) == set([1,5,8])
-    assert ExpandValidCompoundSet(G, set([2,6,11]), ExpandValidCompoundSet(G, set([11]), set([8]))) == set([1,4,5,8])
+    assert ExpandValidCompoundSet(G, force_parallel=True) == set([1])
+
+    assert ExpandValidCompoundSet(G, 4, set([2,9]), set([1,4])) == set([1,4])
+    assert ExpandValidCompoundSet(G, 4, set([2,9]), set([1,4]), force_parallel=True) == set([1,4])
+
+    assert ExpandValidCompoundSet(G, 4, FindValidReactantNodes(G, 4, set([8])), set([8])) == set([1,5,8])
+    assert ExpandValidCompoundSet(G, 4, FindValidReactantNodes(G, 4, set([8]), force_parallel=True), set([8]), force_parallel=True) == set([1,5,8])
+
+    assert ExpandValidCompoundSet(G, 4, set([2,6,11]), ExpandValidCompoundSet(G, 4, set([11]), set([8]))) == set([1,4,5,8])
+    assert ExpandValidCompoundSet(G, 4, set([2,6,11]), ExpandValidCompoundSet(G, 4, set([11]), set([8]), force_parallel=True), force_parallel=True) == set([1,4,5,8])
 
 
-def DistanceToOrigin(network, N=-1):
+def DistanceToOrigin(network, proc_num=1, N=-1):
     """
     Calculates the shortest distance (number of reactions) from the starting compounds (origin) to
     every node up to distance N. Set N to -1 to exhaustively calculate the minimum distance to
@@ -168,6 +239,8 @@ def DistanceToOrigin(network, N=-1):
 
     sys.stdout.write("\nCalculating minimum distance of nodes to origin...\n\n")
     sys.stdout.flush()
+
+    time_start = time.time()
 
     # Number of nodes for formatting
     L = len(network.nodes())
@@ -208,10 +281,10 @@ def DistanceToOrigin(network, N=-1):
         # Expand the valid compound set
         # When n = 0, this means the starting compounds
         # When n > 0, the valid compound set will be expanded
-        new_vcn = ExpandValidCompoundSet(network, new_vrn, valid_compound_nodes) - valid_compound_nodes
+        new_vcn = ExpandValidCompoundSet(network, proc_num, new_vrn, valid_compound_nodes) - valid_compound_nodes
         valid_compound_nodes = new_vcn.union(valid_compound_nodes)
 
-        new_vrn = FindValidReactantNodes(network, valid_compound_nodes) - valid_reactant_nodes
+        new_vrn = FindValidReactantNodes(network, proc_num, valid_compound_nodes) - valid_reactant_nodes
         valid_reactant_nodes = new_vrn.union(valid_reactant_nodes)
 
         for node in new_vcn:
@@ -231,19 +304,20 @@ def DistanceToOrigin(network, N=-1):
 
         n += 1
 
-        if N == -1:
-            if set(prev_vrn) == valid_reactant_nodes and set(prev_vcn) == valid_compound_nodes:
-                # When no new valid compound or reactant nodes have been identified, it is time to stop
-                break
+        if set(prev_vrn) == valid_reactant_nodes and set(prev_vcn) == valid_compound_nodes:
+            # When no new valid compound or reactant nodes have been identified, it is time to stop
+            break
         else:
-            if n > N:
+            if n > N and N !=-1:
                 # n starts at 0 and increments by one before each round dealing
                 # with that particular step n - stop when n exceeds the limit
                 break
         prev_vrn = list(valid_reactant_nodes)
         prev_vcn = list(valid_compound_nodes)
 
-    sys.stdout.write("\nDone.\n")
+    total_time = time.time() - time_start
+
+    sys.stdout.write("\nDone in %ss.\n" %str(total_time))
     sys.stdout.flush()
 
     return (valid_compound_nodes, valid_reactant_nodes)
@@ -269,9 +343,9 @@ def test_DistanceToOrigin():
     G.add_path([8,11,12,1])
     G.add_edge(12,5)
 
-    output_0 = DistanceToOrigin(G.copy(), 0) # Creating a copy, since the function modifies the network it is given
-    output_1 = DistanceToOrigin(G.copy(), 1)
-    output_2 = DistanceToOrigin(G, 2) # Not creating a copy in order to check modification capabilities
+    output_0 = DistanceToOrigin(G.copy(), 4, 0) # Creating a copy, since the function modifies the network it is given
+    output_1 = DistanceToOrigin(G.copy(), 4, 1)
+    output_2 = DistanceToOrigin(G, 4, 2) # Not creating a copy in order to check modification capabilities
 
     assert output_0 == (set([8]), set([11])) # Compound and reactant nodes reachable within 0 reaction steps, respectively
     assert output_1 == (set([8,1,5]), set([11,6,2]))
@@ -304,7 +378,7 @@ def test_DistanceToOrigin():
     Y.add_path([6,8,9,12])
     Y.add_edge(12,10)
 
-    output_Y = DistanceToOrigin(Y, -1)
+    output_Y = DistanceToOrigin(Y, 4, -1)
 
     z = 0
     for node in Y.nodes():
@@ -350,8 +424,8 @@ def test_PruneNetwork():
 
     H = G.copy()
 
-    output = DistanceToOrigin(G, 1)
-    output = DistanceToOrigin(H, 2)
+    output = DistanceToOrigin(G, 4, 1)
+    output = DistanceToOrigin(H, 4, 2)
 
     Y = G.subgraph([1,2,5,6,8,11,12])
     Z = H.subgraph([1,2,3,4,5,6,7,8,9,11,12])
@@ -447,41 +521,29 @@ def main(infile_name, compound, reaction_limit, n_procs, simple, outfile_name):
     # Load and trim the network (data for every compound and reaction is lost)
     sys.stdout.write("\nLoading network pickle...")
     sys.stdout.flush()
-    minetwork = pickle.load(open(infile_name, 'rb'))
-    TrimNetwork(minetwork)
+    minet = pickle.load(open(infile_name, 'rb'))
     sys.stdout.write(" Done.\n")
     sys.stdout.flush()
     sys.stdout.write("Identifying starting compounds...")
     sys.stdout.flush()
-    start_comp_ids = GetStartCompIds(minetwork)
     sys.stdout.write(" Done.\n")
     # Check for simple flag
     if simple:
-        sys.stdout.write("Performing pathfinding using %s processes...\n" % n_procs)
-        pool = mp.Pool(processes=n_procs)
-        M = len(start_comp_ids)
-        arguments = zip(repeat(minetwork, M), start_comp_ids, repeat(compound, M), repeat(reaction_limit, M))
-        results_0 = pool.starmap_async(GetDirectIndependentPaths, arguments)
-        results = results_0.get()
-        #n = 0
-        #sys.stdout.write(" Done.\n\nRetrieving results...\n")
-        #sys.stdout.flush()
-        #for result in results_0:
-        #    result = p.get()
-        #    results.append(result)
-        #    n += 1
-        #    sys.stdout.write("%0.2f%\r" % n / M * 100)
-        #    sys.stdout.flush()
+        if n_procs != 1:
+            sys.stdout.write("Performing network pruning using %s processes...\n" % n_procs)
+        else:
+            sys.stdout.write("Performing network pruning using one process...\n")
+        dummy = DistanceToOrigin(minet, n_procs, reaction_limit)
+        PruneNetwork(minet)
         sys.stdout.write("\nDone.\n")
         sys.stdout.flush()
     else:
         sys.exit('Not implemented. Try --simple.')
     sys.stdout.write("\nWriting results to pickle...")
     sys.stdout.flush()
-    pickle.dump(results, open(outfile_name, 'wb'))
+    pickle.dump(minet, open(outfile_name, 'wb'))
     sys.stdout.write(" Done.\n")
     sys.stdout.flush()
-    return None
 
 
 if __name__ == "__main__":
