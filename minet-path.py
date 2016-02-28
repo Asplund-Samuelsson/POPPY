@@ -7,7 +7,6 @@ import sys
 import argparse
 import pickle
 import multiprocessing as mp
-from multiprocessing.managers import BaseManager
 from collections import defaultdict as dd
 from itertools import repeat
 import time
@@ -15,6 +14,16 @@ import time
 # Define functions
 def Chunks(lst,n):
     return [ lst[i::n] for i in range(n) ]
+
+
+def sWrite(string):
+    sys.stdout.write(string)
+    sys.stdout.flush()
+
+
+def sError(string):
+    sys.stderr.write(string)
+    sys.stderr.flush()
 
 
 def CountRxns(network):
@@ -168,7 +177,7 @@ def ExpandValidCompoundSet(network, proc_num=1, valid_reactant_nodes=set(), comp
             output.extend(compounds)
 
         # Only go parallel if there are 5k or more items
-        if len(valid_reactant_nodes) < 5000  and not force_parallel:
+        if len(valid_reactant_nodes) < 5000 and not force_parallel:
             output = []
             Worker(valid_reactant_nodes)
             comp_node_set = comp_node_set.union(set(output))
@@ -237,8 +246,7 @@ def DistanceToOrigin(network, proc_num=1, N=-1):
     Returns two sets in a tuple: Valid compound nodes and valid reactant nodes.
     """
 
-    sys.stdout.write("\nCalculating minimum distance of nodes to origin...\n\n")
-    sys.stdout.flush()
+    sWrite("\nCalculating minimum distance of nodes to origin...\n\n")
 
     time_start = time.time()
 
@@ -317,8 +325,7 @@ def DistanceToOrigin(network, proc_num=1, N=-1):
 
     total_time = time.time() - time_start
 
-    sys.stdout.write("\nDone in %ss.\n" %str(total_time))
-    sys.stdout.flush()
+    sWrite("\nDone in %ss.\n" %str(total_time))
 
     return (valid_compound_nodes, valid_reactant_nodes)
 
@@ -398,6 +405,7 @@ def PruneNetwork(network):
             x = network.node[node]['dist']
         except KeyError:
             network.remove_node(node)
+    network.graph['pruned'] = True
 
 def test_PruneNetwork():
     # Nodes that were not reached in DistanceToOrigin are going to lack the 'dist' data key
@@ -442,7 +450,7 @@ def test_PruneNetwork():
     assert set(H.edges()) == set(Z.edges())
 
 
-def FindPaths(network, start_node, target_node, reaction_limit):
+def FindPaths(network, reactant_node, compound_node, reaction_limit):
     """
     Find all simple paths from an origin reactant node to a target compound node,
     limiting the total number of reactions.
@@ -450,13 +458,8 @@ def FindPaths(network, start_node, target_node, reaction_limit):
 
     paths = []
 
-    if network.node[start_node]['type'] not in {'rf','rr'} or network.node[target_node]['type'] != 'c':
-        sys.stderr.write("Warning: Incorrect type detected in start and target nodes '%s' and '%s'.\n" % (str(start_node), str(target_node)))
-        sys.stderr.flush()
-        return paths
-
-    if nx.has_path(network, start_node, target_node):
-        for path in nx.shortest_simple_paths(network, start_node, target_node):
+    if nx.has_path(network, reactant_node, compound_node):
+        for path in nx.shortest_simple_paths(network, reactant_node, compound_node):
             if len(path)/3 > reaction_limit:
                 # Dividing the path length by three gives the number of reaction steps
                 break
@@ -467,7 +470,7 @@ def FindPaths(network, start_node, target_node, reaction_limit):
 
     return paths
 
-def test_FindPaths(capsys):
+def test_FindPaths():
 
     # Set up testing network
     G = nx.DiGraph()
@@ -485,9 +488,6 @@ def test_FindPaths(capsys):
     assert FindPaths(G, 5, 4, 2) == [[5,6,2,17,18,4]] # Path length limit 2
     assert len(FindPaths(G, 5, 4, 3)) == 2 # Path length limit 3
     assert FindPaths(G, 13, 2, 2) == [[13,14,4,19,20,2]] # Different starting point + Cyclicity
-    assert FindPaths(G, 1, 4, 5) == []
-    out, err = capsys.readouterr()
-    assert err == "Warning: Incorrect type detected in start and target nodes '1' and '4'.\n"
 
 
 def SortPaths(paths):
@@ -516,44 +516,166 @@ def test_SortPaths():
     assert SortPaths(paths)[8][0] == paths[0]
     assert len(SortPaths(paths)) == 3
 
+
+def GeneratePathBins(network, target_node, reaction_limit, n_procs=1):
+    """
+    Generate paths to a target node from origin reactant nodes and bin them
+    according to their root products node.
+
+    Returns a dictionary with lists of paths under keys representing root nodes.
+    """
+
+    # Prepare Work queue
+    Work = mp.Queue()
+
+    for origin_node in FindValidReactantNodes(network):
+        Work.put(origin_node)
+
+    # Define the Worker
+    def Worker():
+        while True:
+            origin_node = Work.get()
+            if origin_node is None:
+                break
+            paths = FindPaths(network, origin_node, target_node, reaction_limit)
+            output.extend(paths)
+
+    with mp.Manager() as manager:
+        # Initialize output list in manager
+        output = manager.list()
+
+        # Start processes
+        procs = []
+        for i in range(n_procs):
+            p = mp.Process(target=Worker)
+            procs.append(p)
+            p.start()
+
+        # Stop processes
+        for i in range(n_procs):
+            Work.put(None)
+        for p in procs:
+            p.join()
+
+        # Return sorted output
+        return SortPaths(output)
+
+def test_GeneratePathBins():
+    G = nx.DiGraph()
+
+    G.add_nodes_from([1,4,9,14,22,27,32,37,42,47,52], type='c', start=False)
+    for node in [1,32,37,42,52]: G.node[node]['start'] = True
+
+    rf = [2,7,20,12,101,25,30,35,40,45,55,50]
+    rr = [5,10,23,18,15,28,33,38,43,48,57,53]
+    pf = [x + 1 for x in rf]
+    pr = [x + 1 for x in rr]
+
+    assert set(rf).intersection(set(rr)) == set()
+    assert len(set(rf)) == len(set(rr)) == 12
+    assert set(G.nodes()).intersection(set(rf)) == set()
+    assert set(G.nodes()).intersection(set(rr)) == set()
+    assert set(G.nodes()).intersection(set(pf)) == set()
+    assert set(G.nodes()).intersection(set(pr)) == set()
+
+    G.add_nodes_from(rf, type='rf')
+    G.add_nodes_from(pf, type='pf')
+    G.add_nodes_from(rr, type='rr')
+    G.add_nodes_from(pr, type='pr')
+
+    G.add_path([1,2,3,4,7,8,9,20,21,22])
+    G.add_path([22,23,24,9,10,11,4,5,6,1])
+    G.add_path([4,12,13,14,101,102,9])
+    G.add_path([9,18,19,14,15,16,4])
+    G.add_path([32,33,34,27,28,29,22])
+    G.add_path([22,25,26,27,30,31,32])
+    G.add_path([22,35,36,37,40,41,42,45,46,47,55,56,22])
+    G.add_path([22,57,58,47,48,49,42,43,44,37,38,39,22])
+    G.add_path([52,53,54,47,50,51,52])
+
+    for node in rf + rr: G.node[node]['c'] = set(G.predecessors(node))
+
+    for node in pf + pr: G.node[node]['c'] = set(G.successors(node))
+
+    only_one_reactant = True
+
+    for node in G.nodes():
+        if G.node[node]['type'] in {'rf','rr'}:
+            if len(G.node[node]['c']) != 1:
+                only_one_reactant = False
+
+    assert only_one_reactant
+
+
+    binned_paths = GeneratePathBins(G, 22, 5, n_procs=4)
+
+    assert len(binned_paths) == 4
+    assert set(binned_paths.keys()) == set([21,29,39,56])
+
+    assert len(binned_paths[21]) == 2
+    assert [2,3,4,7,8,9,20,21,22] in binned_paths[21]
+    assert [2,3,4,12,13,14,101,102,9,20,21,22] in binned_paths[21]
+
+    assert len(binned_paths[29]) == 1
+    assert binned_paths[29] == [[33,34,27,28,29,22]]
+
+    assert len(binned_paths[39]) == 3
+    assert [38,39,22] in binned_paths[39]
+    assert [43,44,37,38,39,22] in binned_paths[39]
+    assert [53,54,47,48,49,42,43,44,37,38,39,22] in binned_paths[39]
+
+    assert len(binned_paths[56]) == 3
+    assert [53,54,47,55,56,22] in binned_paths[56]
+    assert [45,46,47,55,56,22] in binned_paths[56]
+    assert [40,41,42,45,46,47,55,56,22] in binned_paths[56]
+
+
+    binned_paths_2 = GeneratePathBins(G, 9, 2, n_procs=4)
+
+    assert len(binned_paths_2) == 2
+    assert set(binned_paths_2.keys()) == set([8,24])
+
+    assert binned_paths_2[8] == [[2,3,4,7,8,9]]
+    assert binned_paths_2[24] == [[38,39,22,23,24,9]]
+
+    assert GeneratePathBins(G, 9, 1) == {}
+
+
 # Main code block
-def main(infile_name, compound, reaction_limit, n_procs, simple, outfile_name):
+def main(infile_name, compound, reaction_limit, n_procs, prune, outfile_name):
     # Load and trim the network (data for every compound and reaction is lost)
-    sys.stdout.write("\nLoading network pickle...")
-    sys.stdout.flush()
-    minet = pickle.load(open(infile_name, 'rb'))
-    sys.stdout.write(" Done.\n")
-    sys.stdout.flush()
-    sys.stdout.write("Identifying starting compounds...")
-    sys.stdout.flush()
-    sys.stdout.write(" Done.\n")
-    # Check for simple flag
-    if simple:
-        if n_procs != 1:
-            sys.stdout.write("Performing network pruning using %s processes...\n" % n_procs)
-        else:
-            sys.stdout.write("Performing network pruning using one process...\n")
-        dummy = DistanceToOrigin(minet, n_procs, reaction_limit)
-        PruneNetwork(minet)
-        sys.stdout.write("\nDone.\n")
-        sys.stdout.flush()
+    sWrite("\nLoading network pickle...")
+    network = pickle.load(open(infile_name, 'rb'))
+    sWrite(" Done.\n")
+
+    # Network preparations
+    network_pruned = False
+    if prune:
+        sWrite("Pruning network...\n")
+        dummy = DistanceToOrigin(network, n_procs, -1)
+        PruneNetwork(network)
+        sWrite("\nDone.\n")
+    if dicts:
+        sWrite("Preparing compound dictionaries...")
+        PrepareDictionaries(network)
+        sWrite(" Done.\n")
     else:
         sys.exit('Not implemented. Try --simple.')
-    sys.stdout.write("\nWriting results to pickle...")
-    sys.stdout.flush()
-    pickle.dump(minet, open(outfile_name, 'wb'))
-    sys.stdout.write(" Done.\n")
-    sys.stdout.flush()
+    sWrite("\nWriting results to pickle...")
+    pickle.dump(network, open(outfile_name, 'wb'))
+    sWrite(" Done.\n")
 
 
 if __name__ == "__main__":
     # Read arguments from the commandline
     parser = argparse.ArgumentParser()
-    parser.add_argument('infile', help='Read minet network pickle.')
-    parser.add_argument('outfile', help='Write identified pathways as a list of graphs to output pickle.')
-    parser.add_argument('-c', '--compound', type=str, help='Target compound.', required=True)
+    parser.add_argument('infile', help='Read minet network pickle.', required=True)
+    parser.add_argument('-o', '--outfile', type=str, help='Save identified pathways as a list of graphs in pickle.')
+    parser.add_argument('-n', '--network', type=str, help='Save manipulated network in pickle.')
+    parser.add_argument('-c', '--compound', type=str, help='Target compound.')
     parser.add_argument('-r', '--reactions', type=int, default=10, help='Maximum number of reactions.')
     parser.add_argument('-p', '--processes', type=int, default=1, help='Number of parallell processes to run.')
-    parser.add_argument('--simple', action="store_true", help='Only calculate simple, direct paths (no branching).')
+    parser.add_argument('--prune', action="store_true", help='Prune the network to reachable nodes.')
+    parser.add_argument('--dicts', action="store_true", help='Prepare dictionaries for KEGG and name target compound selection.')
     args = parser.parse_args()
     main(args.infile, args.compound, args.reactions, args.processes, args.simple, args.outfile)
