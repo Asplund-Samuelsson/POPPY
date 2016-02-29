@@ -10,6 +10,9 @@ import multiprocessing as mp
 from collections import defaultdict as dd
 from itertools import repeat
 import time
+from datetime import timedelta as delta
+import threading
+import re
 
 # Define functions
 def Chunks(lst,n):
@@ -64,6 +67,38 @@ def test_CountRxns():
     assert CountRxns(p2) == 1
     assert CountRxns(p3) == 0
     assert CountRxns(p4) == 1
+
+
+def PrepareDictionaries(network):
+    """Prepares dictionaries for direct translation of KEGG IDs and Names to MINE IDs."""
+    network.graph['kegg2mid'] = {}
+    network.graph['name2mid'] = {}
+    for mid in network.graph['mine_data'].keys():
+        try: kegg_ids = network.graph['mine_data'][mid]['DB_links']['KEGG']
+        except KeyError: kegg_ids = []
+        try: names = network.graph['mine_data'][mid]['Names']
+        except KeyError: names = []
+        for kegg_id in kegg_ids:
+            network.graph['kegg2mid'][kegg_id] = mid
+        for name in names:
+            network.graph['name2mid'][name] = mid
+
+def test_PrepareDictionaries():
+    G = nx.DiGraph()
+    G.graph['mine_data'] = {}
+    G.graph['mine_data']['C1'] = {'_id':'C1','Names':['Something','Anything'], 'DB_links':{'KEGG':['C93102']}}
+    G.graph['mine_data']['C2'] = {'_id':'C2','Names':['Whatever'], 'DB_links':{'KEGG':['C33391','C33392']}}
+    G.graph['mine_data']['C3'] = {'_id':'C3','Names':['Bit','Bob']}
+    G.graph['mine_data']['C4'] = {'_id':'C4'}
+    G.graph['mine_data']['R1'] = {'_id':'R1'}
+
+    expected_kegg2mid = {'C93102':'C1','C33391':'C2','C33392':'C2'}
+    expected_name2mid = {'Something':'C1','Anything':'C1','Whatever':'C2','Bit':'C3','Bob':'C3'}
+
+    PrepareDictionaries(G)
+
+    assert G.graph['kegg2mid'] == expected_kegg2mid
+    assert G.graph['name2mid'] == expected_name2mid
 
 
 def FindStartCompNodes(network):
@@ -398,13 +433,23 @@ def test_DistanceToOrigin():
     assert [Y.node[n]['dist'] for n in range(1,7)] == [0,0,1,1,2,1]
 
 
-def PruneNetwork(network):
-    """Remove all nodes that are 'unreachable' defined as lacking a 'dist' data key."""
+def PruneNetwork(network, remove_cfm=True):
+    """
+    Remove all nodes that are 'unreachable' defined as lacking a 'dist' data key.
+
+    Also removes CFM spectra from the mine_data dictionary by default.
+    """
     for node in network.nodes():
         try:
             x = network.node[node]['dist']
         except KeyError:
             network.remove_node(node)
+    if remove_cfm:
+        for mid in network.graph['mine_data'].keys():
+            if 'Neg_CFM_spectra' in network.graph['mine_data'][mid].keys():
+                del network.graph['mine_data'][mid]['Neg_CFM_spectra']
+            if 'Pos_CFM_spectra' in network.graph['mine_data'][mid].keys():
+                del network.graph['mine_data'][mid]['Pos_CFM_spectra']
     network.graph['pruned'] = True
 
 def test_PruneNetwork():
@@ -430,6 +475,13 @@ def test_PruneNetwork():
     G.add_path([8,11,12,1])
     G.add_edge(12,5)
 
+    G.graph['mine_data'] = {
+    'C1':{'_id':'C1','Neg_CFM_spectra':{'Dummy'},'Pos_CFM_spectra':{'Dummy'}},
+    'C4':{'_id':'C4','Neg_CFM_spectra':{'Dummy'},'Pos_CFM_spectra':{'Dummy'}},
+    'C5':{'_id':'C5','Neg_CFM_spectra':{'Dummy'},'Pos_CFM_spectra':{'Dummy'}},
+    'C8':{'_id':'C1','Neg_CFM_spectra':{'Dummy'},'Pos_CFM_spectra':{'Dummy'}}
+    }
+
     H = G.copy()
 
     output = DistanceToOrigin(G, 4, 1)
@@ -448,6 +500,13 @@ def test_PruneNetwork():
     assert nx.is_isomorphic(H,Z)
     assert H.nodes(data=True) == Z.nodes(data=True)
     assert set(H.edges()) == set(Z.edges())
+
+    assert G.graph['mine_data'] == H.graph['mine_data'] == {
+    'C1':{'_id':'C1'},
+    'C4':{'_id':'C4'},
+    'C5':{'_id':'C5'},
+    'C8':{'_id':'C1'}
+    }
 
 
 def FindPaths(network, reactant_node, compound_node, reaction_limit):
@@ -525,11 +584,27 @@ def GeneratePathBins(network, target_node, reaction_limit, n_procs=1):
     Returns a dictionary with lists of paths under keys representing root nodes.
     """
 
+    sWrite("Generating paths...\n")
+
+    # The maximum number of processes is (mp.cpu_count - 2)
+    # This allows for some overhead for the main process and manager
+
+    if n_procs > mp.cpu_count() - 2:
+        n_procs = mp.cpu_count() - 2
+
     # Prepare Work queue
     Work = mp.Queue()
 
+    n_work = 0
+
     for origin_node in FindValidReactantNodes(network):
         Work.put(origin_node)
+        n_work += 1
+
+    # Add the signal that all work is done
+    for i in range(n_procs):
+        Work.put(None)
+        n_work += 1
 
     # Define the Worker
     def Worker():
@@ -540,9 +615,36 @@ def GeneratePathBins(network, target_node, reaction_limit, n_procs=1):
             paths = FindPaths(network, origin_node, target_node, reaction_limit)
             output.extend(paths)
 
+    # Set up reporter thread
+    def Reporter():
+        t_start = time.time()
+        n_left = Work.qsize()
+        while n_left > 0:
+            # Check progress
+            n_made = len(output)
+            n_left = Work.qsize()
+            n_done = n_work - n_left
+            # Calculate speed and time left
+            speed = n_done / (time.time()-t_start)
+            if n_done != 0:
+                t_left = round(n_left / speed)
+                t_left_str = str(delta(seconds=t_left))
+            else:
+                t_left_str = '.:..:..'
+            status_format = "{0:<10} {1:<25} {2:<25}"
+            progress = float(n_done / n_work * 100)
+            status = '\r' + status_format.format("%0.1f%%" % progress, str(n_made) + " paths found.", "Time left: " + t_left_str)
+            sWrite(status)
+            time.sleep(1)
+
+
     with mp.Manager() as manager:
         # Initialize output list in manager
         output = manager.list()
+
+        # Start reporter
+        reporter = threading.Thread(target=Reporter)
+        reporter.start()
 
         # Start processes
         procs = []
@@ -552,13 +654,19 @@ def GeneratePathBins(network, target_node, reaction_limit, n_procs=1):
             p.start()
 
         # Stop processes
-        for i in range(n_procs):
-            Work.put(None)
         for p in procs:
             p.join()
 
+        # Stop reporter
+        reporter.join()
+
+        sWrite("\nDone.\n")
+        sWrite("Sorting paths...")
+
         # Return sorted output
-        return SortPaths(output)
+        sorted_paths = SortPaths(output)
+        sWrite(" Done.\n")
+        return sorted_paths
 
 def test_GeneratePathBins():
     G = nx.DiGraph()
@@ -641,41 +749,174 @@ def test_GeneratePathBins():
     assert GeneratePathBins(G, 9, 1) == {}
 
 
+def ParseCompound(compound, network):
+    """Determines the type of compound identifier and returns the node."""
+
+    node = None
+
+    mid_match = re.match('^[CX]{1}[0-9,a-f]{40}$', compound)
+    kegg_match = re.match('^C{1}[0-9]{5}$', compound)
+
+    if mid_match:
+        try:
+            node = network.graph['cmid2node'][compound]
+        except KeyError:
+            sError("Error: MINE ID '%s' appears to not be available in the network.\n" % compound)
+    elif kegg_match:
+        if 'kegg2mid' in network.graph.keys():
+            try:
+                node = network.graph['cmid2node'][network.graph['kegg2mid'][compound]]
+            except KeyError:
+                sError("Error: KEGG ID '%s' appears to not be available in the network.\n" % compound)
+        else:
+            sError("Error: KEGG to node dictionary to use with KEGG ID '%s' not present. Use the --dicts option.\n" % compound)
+    else:
+        if 'name2mid' in network.graph.keys():
+            try:
+                node = network.graph['cmid2node'][network.graph['name2mid'][compound]]
+            except KeyError:
+                sError("Error: Name '%s' appears to not be available in the network.\n" % compound)
+        else:
+            sError("Error: Name to node dictionary to use with '%s' not present. Use the --dicts option.\n" % compound)
+
+    return node
+
+def test_ParseCompound(capsys):
+    G = nx.DiGraph()
+    G.graph['cmid2node'] = {}
+    G.graph['kegg2mid'] = {}
+    G.graph['name2mid'] = {}
+
+    G.graph['cmid2node'] = {
+    'Cf647c96ae2e66c3b6ab160faa1d8498be5112fe4':1,
+    'C6a6f4d5234ea2b14b42c391eb760d6311afa8388':2,
+    'C31b986bd97ef9152d7534436e847379077d4553c':3,
+    'Cbef44c34f09ee9b80ad4b9daaa32afe088b41507':4,
+    'C5a2e2841cff1008380531689c8c45b6dbecd04b6':5,
+    'C0736b9ad03e466caa7698fbd3fccf06f6654fb53':6,
+    'C0d3cb8256055b59b846cd5930d69c266bb13deb1':7,
+    'C12c16f3e8910911f982fe6fcd541c35bca59119e':8,
+    'Ce4a58113b67f1e7edb22e28123f300f36b763903':9
+    }
+
+    G.graph['kegg2mid'] = {
+    'C31890':'Cf647c96ae2e66c3b6ab160faa1d8498be5112fe4',
+    'C00291':'C6a6f4d5234ea2b14b42c391eb760d6311afa8388',
+    'C67559':'C31b986bd97ef9152d7534436e847379077d4553c',
+    'C67560':'C31b986bd97ef9152d7534436e847379077d4553c'
+    }
+
+    G.graph['name2mid'] = {
+    'Alpha':'C0d3cb8256055b59b846cd5930d69c266bb13deb1',
+    'Beta':'C12c16f3e8910911f982fe6fcd541c35bca59119e',
+    'Gamma':'Ce4a58113b67f1e7edb22e28123f300f36b763903',
+    'n-Alpha':'C0d3cb8256055b59b846cd5930d69c266bb13deb1',
+    'n-Beta':'C12c16f3e8910911f982fe6fcd541c35bca59119e',
+    'n-Gamma':'Ce4a58113b67f1e7edb22e28123f300f36b763903'
+    }
+
+    # Test KEGG IDs
+    assert ParseCompound('C31890',G) == 1
+    assert ParseCompound('C00291',G) == 2
+    assert ParseCompound('C67559',G) == 3
+    assert ParseCompound('C67560',G) == 3
+
+    # Test MINE IDs
+    assert [ParseCompound(c,G) for c in [{v: k for k, v in G.graph['cmid2node'].items()}[n] for n in range(1,10)]] == list(range(1,10))
+
+    # Test Names
+    assert ParseCompound('Alpha',G) == ParseCompound('n-Alpha',G) == 7
+    assert ParseCompound('Beta',G) == ParseCompound('n-Beta',G) == 8
+    assert ParseCompound('Gamma',G) == ParseCompound('n-Gamma',G) == 9
+
+    # Test error output
+    assert ParseCompound('Cffffffffffffffffffffffffffffffffffffffff', G) == None
+    assert ParseCompound('C00001', G) == None
+    Y = nx.DiGraph()
+    assert ParseCompound('C00001', Y) == None
+    assert ParseCompound('Delta', G) == None
+    assert ParseCompound('Delta', Y) == None
+
+    exp_err = "Error: MINE ID '%s' appears to not be available in the network.\n" % 'Cffffffffffffffffffffffffffffffffffffffff'
+    exp_err = exp_err + "Error: KEGG ID '%s' appears to not be available in the network.\n" % 'C00001'
+    exp_err = exp_err + "Error: KEGG to node dictionary to use with KEGG ID '%s' not present. Use the --dicts option.\n" % 'C00001'
+    exp_err = exp_err + "Error: Name '%s' appears to not be available in the network.\n" % 'Delta'
+    exp_err = exp_err + "Error: Name to node dictionary to use with '%s' not present. Use the --dicts option.\n" % 'Delta'
+
+    out, err = capsys.readouterr()
+
+    assert err == exp_err
+
+
 # Main code block
-def main(infile_name, compound, reaction_limit, n_procs, prune, outfile_name):
+def main(infile_name, compound, reaction_limit, n_procs, prune, dicts, network_out, outfile_name):
+
+    # Default results are empty
+    results = {}
+
     # Load and trim the network (data for every compound and reaction is lost)
     sWrite("\nLoading network pickle...")
     network = pickle.load(open(infile_name, 'rb'))
     sWrite(" Done.\n")
 
     # Network preparations
+
+    # Pruning
     network_pruned = False
     if prune:
-        sWrite("Pruning network...\n")
+        sWrite("\nPruning network...\n")
         dummy = DistanceToOrigin(network, n_procs, -1)
         PruneNetwork(network)
         sWrite("\nDone.\n")
+        network_pruned = True
+    else:
+        sWrite("Checking whether network has been pruned...")
+        if 'pruned' in network.graph.keys():
+            if network.graph['pruned']:
+                network_pruned = True
+                sWrite(" Yes.\n")
+        else:
+            sWrite(" No.\n")
+    if not network_pruned:
+        sWrite("Pruning the network is recommended. Consider using the --prune option.\n")
+
+    # Dictionary setup
     if dicts:
-        sWrite("Preparing compound dictionaries...")
+        sWrite("\nPreparing compound dictionaries...")
         PrepareDictionaries(network)
         sWrite(" Done.\n")
-    else:
-        sys.exit('Not implemented. Try --simple.')
-    sWrite("\nWriting results to pickle...")
-    pickle.dump(network, open(outfile_name, 'wb'))
-    sWrite(" Done.\n")
+
+    # Pathway enumeration
+    if compound:
+        target_node = ParseCompound(compound, network)
+        if target_node == None:
+            sys.exit("Error: Target node was not found. Check compound '%s'.\n" % compound)
+        path_bins = GeneratePathBins(network, target_node, reaction_limit, n_procs)
+        results = path_bins
+
+    # Save network
+    if network_out:
+        sWrite("\nWriting network to pickle...")
+        pickle.dump(network, open(network_out, 'wb'))
+        sWrite(" Done.\n")
+
+    # Save results
+    if outfile_name:
+        sWrite("\nWriting results to pickle...")
+        pickle.dump(results, open(outfile_name, 'wb'))
+        sWrite(" Done.\n")
 
 
 if __name__ == "__main__":
     # Read arguments from the commandline
     parser = argparse.ArgumentParser()
-    parser.add_argument('infile', help='Read minet network pickle.', required=True)
-    parser.add_argument('-o', '--outfile', type=str, help='Save identified pathways as a list of graphs in pickle.')
-    parser.add_argument('-n', '--network', type=str, help='Save manipulated network in pickle.')
-    parser.add_argument('-c', '--compound', type=str, help='Target compound.')
-    parser.add_argument('-r', '--reactions', type=int, default=10, help='Maximum number of reactions.')
+    parser.add_argument('infile', help='Read minet network pickle.')
+    parser.add_argument('-o', '--outfile', type=str, default=False, help='Save identified pathways in pickle.')
+    parser.add_argument('-n', '--network', type=str, default=False, help='Save manipulated network in pickle.')
+    parser.add_argument('-c', '--compound', type=str, default=False, help='Target compound.')
+    parser.add_argument('-r', '--reactions', type=int, default=5, help='Maximum number of reactions.')
     parser.add_argument('-p', '--processes', type=int, default=1, help='Number of parallell processes to run.')
     parser.add_argument('--prune', action="store_true", help='Prune the network to reachable nodes.')
-    parser.add_argument('--dicts', action="store_true", help='Prepare dictionaries for KEGG and name target compound selection.')
+    parser.add_argument('--dicts', action="store_true", help='Set up KEGG and name target compound selection.')
     args = parser.parse_args()
-    main(args.infile, args.compound, args.reactions, args.processes, args.simple, args.outfile)
+    main(args.infile, args.compound, args.reactions, args.processes, args.prune, args.dicts, args.network, args.outfile)
