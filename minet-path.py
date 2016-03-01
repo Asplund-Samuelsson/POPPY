@@ -588,9 +588,11 @@ def GeneratePathBins(network, target_node, reaction_limit, n_procs=1):
 
     # The maximum number of processes is (mp.cpu_count - 2)
     # This allows for some overhead for the main process and manager
-
     if n_procs > mp.cpu_count() - 2:
-        n_procs = mp.cpu_count() - 2
+        if n_procs - 2 > 1:
+            n_procs = mp.cpu_count() - 2
+        else:
+            n_procs = 1
 
     # Prepare Work queue
     Work = mp.Queue()
@@ -747,6 +749,88 @@ def test_GeneratePathBins():
     assert binned_paths_2[24] == [[38,39,22,23,24,9]]
 
     assert GeneratePathBins(G, 9, 1) == {}
+
+
+def RemoveIncompleteReactions(network):
+    """
+    Removes reactions that require reactants not provided as start compounds or
+    as products in other reactions of the network. Does not remove any compound
+    nodes. The process is iterative, as removal of one reaction may make
+    additional reactions 'incomplete' in terms of reactant presence.
+    """
+
+    start_comp_nodes = FindStartCompNodes(network)
+
+    while True:
+
+        # Stop iteration if no nodes were removed in the previous round
+        try:
+            if prev_node_count == len(network.nodes()):
+                break
+        except NameError:
+            # First round yields a NameError
+            pass
+
+        # Determine what compounds are available
+        produced_comp_nodes = set()
+        for node in network.nodes():
+            if network.node[node]['type'] in {'pf','pr'}:
+                for c_node in network.node[node]['c']:
+                    produced_comp_nodes.add(c_node)
+        available_comp_nodes = produced_comp_nodes.union(start_comp_nodes)
+
+        # Determine what reactions should be removed based on unfulfilled reactant requirements
+        nodes_to_remove = set()
+        for node in network.nodes():
+            if network.node[node]['type'] in {'rf','rr'}:
+                if not network.node[node]['c'].issubset(available_comp_nodes):
+                    nodes_to_remove.add(node)
+                    nodes_to_remove.add(network.successors(node)[0]) # Reactant nodes have one successors, i.e. a product node
+
+        # Count the number of nodes before purging
+        prev_node_count = len(network.nodes())
+
+        # Remove the nodes
+        for node in nodes_to_remove:
+            try:
+                network.remove_node(node)
+
+
+
+def test_RemoveIncompleteReactions():
+    G = nx.DiGraph()
+
+    # Reactions tier 1
+    G.add_node(1,type='rf',c=set([101,102])) # Origin reaction
+    G.add_node(2,type='pf',c=set([103]))
+    G.add_node(3,type='rr',c=set([104])) # Origin reaction
+    G.add_node(4,type='pr',c=set([105]))
+
+    # Reactions tier 2
+    G.add_node(5,type='rf',c=set([103])) # Non-origin reaction that is complete
+    G.add_node(6,type='pf',c=set([106,107]))
+    G.add_node(7,type='rf',c=set([105,108])) # Non-origin reaction that is incomplete
+    G.add_node(8,type='pf',c=set([109]))
+
+    # Reactions tier 3
+    G.add_node(9,type='rr',c=set([107,109]))
+    G.add_node(10,type='pr',c=set([110]))
+
+    # Compounds (only start compounds and those in the direct path from origin to target)
+    G.add_nodes_from([101,102,104], type='c', start=True)
+    G.add_nodes_from([103,105,107,109,110], type='c', start=False)
+
+    # Add edges
+    G.add_path([101,1,2,103,5,6,107,9,10,110])
+    G.add_path([104,3,4,105,7,8,109,9,10,110])
+    G.add_edge(102,1)
+
+    RemoveIncompleteReactions(G)
+
+    assert set(G.nodes()) == set([101,102,103,104,105,107,109,110,1,2,3,4,5,6])
+    # Reaction nodes 7-10 should be gone
+    # Intermediate compound nodes should not be removed as there might be other,
+    # valid reactions providing routes through them
 
 
 def ParseCompound(compound, network):
