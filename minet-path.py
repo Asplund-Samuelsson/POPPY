@@ -576,7 +576,7 @@ def test_SortPaths():
     assert len(SortPaths(paths)) == 3
 
 
-def GeneratePathBins(network, target_node, reaction_limit, n_procs=1):
+def GeneratePathBins(network, target_node, reaction_limit, n_procs=1, quiet=False):
     """
     Generate paths to a target node from origin reactant nodes and bin them
     according to their root products node.
@@ -584,7 +584,8 @@ def GeneratePathBins(network, target_node, reaction_limit, n_procs=1):
     Returns a dictionary with lists of paths under keys representing root nodes.
     """
 
-    sWrite("Generating paths...\n")
+    if not quiet:
+        sWrite("Generating paths...\n")
 
     # The maximum number of processes is (mp.cpu_count - 2)
     # This allows for some overhead for the main process and manager
@@ -645,8 +646,9 @@ def GeneratePathBins(network, target_node, reaction_limit, n_procs=1):
         output = manager.list()
 
         # Start reporter
-        reporter = threading.Thread(target=Reporter)
-        reporter.start()
+        if not quiet:
+            reporter = threading.Thread(target=Reporter)
+            reporter.start()
 
         # Start processes
         procs = []
@@ -660,14 +662,15 @@ def GeneratePathBins(network, target_node, reaction_limit, n_procs=1):
             p.join()
 
         # Stop reporter
-        reporter.join()
-
-        sWrite("\nDone.\n")
-        sWrite("Sorting paths...")
+        if not quiet:
+            reporter.join()
+            sWrite("\nDone.\n")
+            sWrite("Sorting paths...")
 
         # Return sorted output
         sorted_paths = SortPaths(output)
-        sWrite(" Done.\n")
+        if not quiet:
+            sWrite(" Done.\n")
         return sorted_paths
 
 def test_GeneratePathBins():
@@ -792,10 +795,7 @@ def RemoveIncompleteReactions(network):
 
         # Remove the nodes
         for node in nodes_to_remove:
-            try:
-                network.remove_node(node)
-
-
+            network.remove_node(node)
 
 def test_RemoveIncompleteReactions():
     G = nx.DiGraph()
@@ -833,6 +833,473 @@ def test_RemoveIncompleteReactions():
     # valid reactions providing routes through them
 
 
+def IdentifyBranchNodes(network, severed=False):
+    """
+    Identifies reactant nodes that represent branch points in the pathway network.
+
+    IMPORTANT: This function assumes that non-start predecessors leading to a
+    severed branch are not present in the network, as would be the case for
+    compounds not found in a direct path from origin to target.
+    """
+    branch_nodes = set()
+
+    for node in network.nodes():
+
+        # Branch nodes are reactant nodes
+        if network.node[node]['type'] in {'rf','rr'}:
+            S = 0
+
+            # Iterate over predecessors, which are compound nodes
+            for predecessor in network.predecessors(node):
+                if network.node[predecessor]['start']:
+                    S += 1
+
+            # Start compound nodes should always be included in the network
+            # Severed non-start compound nodes might not be included
+            N = len(network.node[node]['c']) - S
+
+            # Branch reactant nodes have more than one predecessor
+            if len(network.node[node]['c']) > 1:
+                if not severed:
+                    branch_nodes.add(node)
+                else:
+                    # A severed branch node lacks 1 or more predecessors
+                    # compared to what is listed in the 'c' set
+                    if len(network.predecessors(node)) < len(network.node[node]['c']):
+                        branch_nodes.add(node)
+
+    return branch_nodes
+
+def test_IdentifyBranchNodes():
+    # Set up testing network
+    G = nx.DiGraph()
+
+    # Add Compounds
+    G.add_nodes_from([1,2,4,5,6,10], type='c', start=True)
+    G.add_nodes_from([3,7,8,9,11,12,13], type='c', start=False)
+
+    # Add reactions
+    rf = [101,103,105,107,109,111,113,115]
+    G.add_nodes_from(rf, type='rf')
+    G.add_nodes_from([x+1 for x in rf], type='pf')
+    G.node[107]['type'] = 'rr' # Don't forget reverse reactions
+    G.node[108]['type'] = 'pr'
+
+    # Add reactant sets
+    G.node[101]['c'] = set([1])
+    G.node[103]['c'] = set([2])
+    G.node[105]['c'] = set([3])
+    G.node[107]['c'] = set([4])
+    G.node[109]['c'] = set([5])
+    G.node[111]['c'] = set([6,7])
+    G.node[113]['c'] = set([8,9])
+    G.node[115]['c'] = set([10,11,12])
+
+    # Add product sets
+    G.node[102]['c'] = set([3])
+    G.node[104]['c'] = set([3])
+    G.node[106]['c'] = set([7])
+    G.node[108]['c'] = set([8])
+    G.node[110]['c'] = set([9])
+    G.node[112]['c'] = set([11])
+    G.node[114]['c'] = set([12])
+    G.node[116]['c'] = set([13])
+
+    # Add paths
+    G.add_path([1,101,102,3,105,106,7,111,112,11,115,116,13])
+    G.add_path([4,107,108,8,113,114,12,115])
+    G.add_path([5,109,110,9,113])
+    G.add_path([2,103,104,3])
+    G.add_edge(6,111)
+    G.add_edge(10,115)
+
+    # Ensure branch node identification is working
+    assert IdentifyBranchNodes(G) == set([111,113,115])
+
+    # Now let's sever some branches and let the function identify severed branch nodes
+    G.remove_nodes_from([107,108,8])
+    assert IdentifyBranchNodes(G, severed=True) == set([113])
+    G.remove_nodes_from([109,110,9])
+    assert IdentifyBranchNodes(G, severed=True) == set([113])
+    G.remove_nodes_from([105,106,7])
+    assert IdentifyBranchNodes(G, severed=True) == set([111,113])
+
+    H = G.copy()
+    G.remove_nodes_from([111,112,11])
+    H.remove_nodes_from([113,114,12])
+    assert IdentifyBranchNodes(G, severed=True) == set([113,115])
+    assert IdentifyBranchNodes(H, severed=True) == set([111,115])
+
+    G.remove_nodes_from([113,114,12])
+    assert IdentifyBranchNodes(G, severed=True) == set([115])
+
+
+def UpstreamPartialPath(path, target_node):
+    """Returns the path, from a path list, that leads up to and includes the specified node."""
+    partial_path = []
+    for node in path:
+        partial_path.append(node)
+        if node == target_node:
+            if len(path) == len(partial_path):
+                sError("Warning: In UpstreamPartialPath, target node '%s' was the last node of the path.\n" % str(target_node))
+            return partial_path
+
+def test_UpstreamPartialPath(capsys):
+    paths = [
+    [1,2,3,4,5,6,7,8],
+    [10,11,12,4,5,6,7,8],
+    [20,21,22,23,6,31,32,8]
+    ]
+    assert UpstreamPartialPath([1,2,3,4,5,6,7,8], 4) == [1,2,3,4]
+    assert UpstreamPartialPath([10,11,12,4,5,6,7,8], 4) == [10,11,12,4]
+    assert UpstreamPartialPath([20,21,22,23,6,31,32,8], 8) == [20,21,22,23,6,31,32,8]
+    out, err = capsys.readouterr()
+    assert err == "Warning: In UpstreamPartialPath, target node '8' was the last node of the path.\n"
+
+
+def CombinePaths(network, path_bins, n_procs=1):
+
+    sWrite("\nCombining paths into branched pathways...\n")
+
+    # The maximum number of processes is (mp.cpu_count - 2)
+    # This allows for some overhead for the main process and manager
+    if n_procs > mp.cpu_count() - 2:
+        if n_procs - 2 > 1:
+            n_procs = mp.cpu_count() - 2
+        else:
+            n_procs = 1
+
+    # List of finished pathways
+    finished_pathways = []
+
+    # For each path bin, perform branched pathway enumeration
+    bin_number = 0
+    max_bin_number = len(path_bins)
+    for path_bin in path_bins.items():
+
+        print("")
+
+        bin_number +=1
+
+        # Acquire basic data
+        root_node = path_bin[0]
+        paths = path_bin[1]
+        path_nodes = set([n for p in paths for n in p])
+        start_comp_nodes = FindStartCompNodes(network)
+
+        # Construct a sub-network of all paths and start compounds
+        bin_network = network.subgraph(path_nodes.union(start_comp_nodes))
+
+        # Identify the incomplete reactions and remove them
+        RemoveIncompleteReactions(bin_network)
+        valid_nodes = set(bin_network.nodes())
+
+        # Go through all paths and only keep those that are still valid after removal of incomplete reactions
+        valid_paths = []
+        for path in paths:
+            if set(path).issubset(valid_nodes):
+                valid_paths.append(path)
+
+        # Identify branch nodes
+        branch_nodes = IdentifyBranchNodes(bin_network)
+
+        # For each branch node, list partial paths that may fill the empty spot
+        partial_paths = {}
+        for branch_node in branch_nodes:
+            for path in valid_paths:
+                if branch_node in path:
+                    partial_path = UpstreamPartialPath(path, branch_node)
+                    try:
+                        # Only add partial_paths that are not already in the list
+                        if not partial_path in partial_paths[branch_node]:
+                            partial_paths[branch_node].append(partial_path)
+                    except KeyError:
+                        partial_paths[branch_node] = [partial_path]
+
+        # Set up a queue that is populated with sets of nodes representing unfinished branched pathway networks
+        Work = mp.JoinableQueue()
+        for work in Chunks(valid_paths, n_procs):
+            work = [set(path) for path in work]
+            Work.put(work)
+
+        # Define worker that picks an unfinished pathway from the queue
+        lock = mp.Lock()
+
+        def Worker():
+            while True:
+                more_work = []
+                work = Work.get()
+                if work is None:
+                    Work.task_done()
+                    break
+                # Specify the nodes of the pathway sub-network
+                for path in work:
+                    path_nodes = path.union(start_comp_nodes)
+                    # Create a sub-network representing the current pathway
+                    path_network = bin_network.subgraph(path_nodes)
+                    # The worker identifies severed branch nodes in the unfinished pathways
+                    severed_branch_nodes = IdentifyBranchNodes(path_network, severed=True)
+                    # If there are no severed branch nodes, the pathway is finished - put it in the manager list
+                    if len(severed_branch_nodes) == 0:
+                        output.append(path)
+                    # Else the worker generates all possible pathways substituting the severed branch with partial paths previously identified
+                    else:
+                        for branch_node in severed_branch_nodes:
+                            try:
+                                substitutes = partial_paths[branch_node]
+                                for substitute in substitutes:
+                                    # Only accept substitutes that either add a whole new branch
+                                    #   a - x - x - |
+                                    #               | - b
+                                    #   c - x - x - |
+                                    if set(substitute).intersection(path_nodes) == set([branch_node]):
+                                        more_work.append(set(substitute).union(path))
+                                    # or add a complementary parallel route to the network (rare?)
+                                    #       | - x - x - |
+                                    #   a - |           | - b
+                                    #       | - x - x - |
+                                    if set(substitute[0:2]).issubset(path_nodes) and len(set(substitute).intersection(path_nodes)) < len(substitute):
+                                        more_work.append(set(substitute).union(path))
+                            except KeyError:
+                                sError("Warning: Severed branch node '%s' has no substitutes. Discarding affected pathways.\n")
+                                break
+                # Add more work (pathways) to the queue
+                if len(more_work):
+                    actual_more_work = []
+                    lock.acquire()
+                    for pathway in more_work:
+                        # Avoid feedback loops
+                        if not pathway in already_created_intermediates:
+                            already_created_intermediates.append(pathway)
+                            actual_more_work.append(pathway)
+                    lock.release()
+                    if len(actual_more_work):
+                        Work.put(actual_more_work)
+                Work.task_done()
+
+        # Define a reporter thread that reports on progress of the multiprocess pathway enumeration
+        def Reporter():
+            while report:
+                finished_n = len(finished_pathways) + len(output)
+                remaining_work = Work.qsize()
+                message = "{0:<%s} {1:<26} {2:<10}" % str(11+1+2*max_bin_number)
+                msg0 = "\rPath bin %s/%s:" % (bin_number,max_bin_number)
+                msg1 = "%s pathways finished." % str(finished_n)
+                msg2 = "In queue: %s" % str(remaining_work)
+                sWrite(message.format(msg0, msg1, msg2))
+                time.sleep(1)
+
+
+        # Set up a manager with a list of sets of nodes representing finished branched pathways
+        with mp.Manager() as manager:
+            output = manager.list()
+            already_created_intermediates = manager.list()
+            report = True
+
+            # Start Reporter
+            reporter = threading.Thread(target=Reporter)
+            reporter.start()
+
+            # Start Workers
+            procs = []
+            for i in range(n_procs):
+                p = mp.Process(target=Worker)
+                procs.append(p)
+                p.start()
+
+            # Join queue
+            Work.join()
+
+            # Join Workers
+            for i in range(n_procs):
+                Work.put(None)
+            for p in procs:
+                p.join
+
+            # Join Reporter
+            report = False
+            reporter.join()
+
+            # Add all finished pathways in the manager to a list
+            for pathway in output:
+                finished_pathways.append(pathway)
+
+    sWrite("\n\nDone.\n")
+    return finished_pathways
+
+def test_CombinePaths():
+    # Set up testing network - Same as for IdentifyBranchNodes
+    G = nx.DiGraph()
+
+    # Add Compounds
+    G.add_nodes_from([1,2,4,5,6,10], type='c', start=True)
+    G.add_nodes_from([3,7,8,9,11,12,13], type='c', start=False)
+
+    # Add reactions
+    rf = [101,103,105,107,109,111,113,115]
+    G.add_nodes_from(rf, type='rf')
+    G.add_nodes_from([x+1 for x in rf], type='pf')
+    G.node[107]['type'] = 'rr' # Don't forget reverse reactions
+    G.node[108]['type'] = 'pr'
+
+    # Add reactant sets
+    G.node[101]['c'] = set([1])
+    G.node[103]['c'] = set([2])
+    G.node[105]['c'] = set([3])
+    G.node[107]['c'] = set([4])
+    G.node[109]['c'] = set([5])
+    G.node[111]['c'] = set([6,7])
+    G.node[113]['c'] = set([8,9])
+    G.node[115]['c'] = set([10,11,12])
+
+    # Add product sets
+    G.node[102]['c'] = set([3])
+    G.node[104]['c'] = set([3])
+    G.node[106]['c'] = set([7])
+    G.node[108]['c'] = set([8])
+    G.node[110]['c'] = set([9])
+    G.node[112]['c'] = set([11])
+    G.node[114]['c'] = set([12])
+    G.node[116]['c'] = set([13])
+
+    # Add paths
+    G.add_path([1,101,102,3,105,106,7,111,112,11,115,116,13])
+    G.add_path([4,107,108,8,113,114,12,115])
+    G.add_path([5,109,110,9,113])
+    G.add_path([2,103,104,3])
+    G.add_edge(6,111)
+    G.add_edge(10,115)
+
+    # Add three extra paths to increase complexity
+
+    # One leading through 6 (a starting compound)
+    G.add_path([20,201,202,6])
+    G.node[20]['type'] = 'c'
+    G.node[20]['start'] = True
+    G.node[201]['type'] = 'rr'
+    G.node[201]['c'] = set([20])
+    G.node[202]['type'] = 'pr'
+    G.node[202]['c'] = set([6])
+
+    # One adding an additional option to produce 7
+    G.add_path([30,301,302,7])
+    G.node[30]['type'] = 'c'
+    G.node[30]['start'] = True
+    G.node[301]['type'] = 'rf'
+    G.node[301]['c'] = set([20])
+    G.node[302]['type'] = 'pf'
+    G.node[302]['c'] = set([6])
+
+    # One adding an additional root node and a route beginning in 5
+    G.add_path([5,401,402,40,403,404,13])
+    G.node[401]['type'] = 'rr'
+    G.node[401]['c'] = set([5])
+    G.node[402]['type'] = 'pr'
+    G.node[402]['c'] = set([40])
+    G.node[40]['type'] = 'c'
+    G.node[40]['start'] = False
+    G.node[403]['type'] = 'rr'
+    G.node[403]['c'] = set([40])
+    G.node[404]['type'] = 'pr'
+    G.node[404]['c'] = set([13])
+
+    # Also adding a shortcut from 40 to 12 that will result in an invalid reaction
+    G.add_path([40,501,502,12])
+    G.add_edge(50,501)
+    G.node[50]['type'] = 'c'
+    G.node[50]['start'] = False # This compound should result in an incomplete reaction
+    G.node[501]['type'] = 'rr'
+    G.node[501]['c'] = set([40,50])
+    G.node[502]['type'] = 'pr'
+    G.node[502]['c'] = set([12])
+
+    # These are the complete sets of nodes representing branched pathways
+    req_1 = set([7,111,112,11,115,116,13,12,114,113,9,8,109,110,107,108])
+    expected_branched_paths = [
+    set([101,102,3,105,106]).union(req_1),
+    set([103,104,3,105,106]).union(req_1),
+    set([301,302]).union(req_1),
+    set([201,202,6,101,102,3,105,106]).union(req_1),
+    set([201,202,6,103,104,3,105,106]).union(req_1),
+    set([201,202,6,301,302]).union(req_1),
+    set([401,402,40,403,404,13])
+    ]
+
+    # Letting the automated functions produce a result
+    path_bins = GeneratePathBins(G, 13, 5, quiet=True)
+    output_branched_paths = CombinePaths(G, path_bins, n_procs=2)
+
+    paths_equal = True
+    missing = []
+    unexpected = []
+    for path in expected_branched_paths:
+        if path not in output_branched_paths:
+            paths_equal = False
+            missing.append(sorted(list(path)))
+    for path in output_branched_paths:
+        if path not in expected_branched_paths:
+            paths_equal = False
+            unexpected.append(sorted(list(path)))
+
+    if not paths_equal:
+        sError("Missing: " + str(missing) + "\n")
+        sError("Unexpected: " + str(unexpected) + "\n")
+
+    assert paths_equal
+    assert len(expected_branched_paths) == len(output_branched_paths)
+
+    # Test for parallel paths detection and acceptance
+    N = nx.DiGraph()
+    N.add_nodes_from([1,7], type='c', start=True)
+    N.add_nodes_from([2,3,4,5,6], type='c', start=False)
+    N.add_nodes_from([101,301,501], type='rf')
+    N.add_nodes_from([102,302,502], type='pf')
+    N.add_nodes_from([103,303,503], type='rr')
+    N.add_nodes_from([104,304,504], type='pr')
+    N.add_nodes_from([201,401], type='rr')
+    N.add_nodes_from([202,402], type='pr')
+    N.add_nodes_from([203,403], type='rf')
+    N.add_nodes_from([204,404], type='pf')
+    N.add_path([1,101,102,2,201,202,5,401,402,6])
+    N.add_path([6,403,404,5,203,204,2,103,104,1])
+    N.add_path([1,101,102,3,301,302,4,401,402,6])
+    N.add_path([6,403,404,4,303,304,3,103,104,1])
+    N.add_path([7,501,502,4,503,504,7])
+    for node in N.nodes():
+        if N.node[node]['type'] in {'rf','rr'}:
+            N.node[node]['c'] = set(N.predecessors(node))
+        if N.node[node]['type'] in {'pf','pr'}:
+            N.node[node]['c'] = set(N.successors(node))
+
+    N_expected_paths = [
+    set([101,102,2,201,202,5,401,402,6,3,301,302,4]),
+    set([101,102,2,201,202,5,401,402,6,501,502,4])
+    ]
+
+    path_bins = GeneratePathBins(N, 6, 5, quiet=True)
+    output_branched_paths = CombinePaths(N, path_bins, n_procs=2)
+
+    paths_equal = True
+    missing = []
+    unexpected = []
+    for path in N_expected_paths:
+        if path not in output_branched_paths:
+            paths_equal = False
+            missing.append(sorted(list(path)))
+    for path in output_branched_paths:
+        if path not in N_expected_paths:
+            paths_equal = False
+            unexpected.append(sorted(list(path)))
+
+    if not paths_equal:
+        sError("Missing: " + str(missing) + "\n")
+        sError("Unexpected: " + str(unexpected) + "\n")
+
+    assert paths_equal
+    assert len(N_expected_paths) == len(output_branched_paths)
+
+
+
 def ParseCompound(compound, network):
     """Determines the type of compound identifier and returns the node."""
 
@@ -844,12 +1311,18 @@ def ParseCompound(compound, network):
     if mid_match:
         try:
             node = network.graph['cmid2node'][compound]
+            if not node in network.nodes():
+                sError("Error: MINE ID '%s' appears to not be available in the network.\n" % compound)
+                node = None
         except KeyError:
             sError("Error: MINE ID '%s' appears to not be available in the network.\n" % compound)
     elif kegg_match:
         if 'kegg2mid' in network.graph.keys():
             try:
                 node = network.graph['cmid2node'][network.graph['kegg2mid'][compound]]
+                if not node in network.nodes():
+                    sError("Error: KEGG ID '%s' appears to not be available in the network.\n" % compound)
+                    node = None
             except KeyError:
                 sError("Error: KEGG ID '%s' appears to not be available in the network.\n" % compound)
         else:
@@ -858,6 +1331,9 @@ def ParseCompound(compound, network):
         if 'name2mid' in network.graph.keys():
             try:
                 node = network.graph['cmid2node'][network.graph['name2mid'][compound]]
+                if not node in network.nodes():
+                    sError("Error: Name '%s' appears to not be available in the network.\n" % compound)
+                    node = None
             except KeyError:
                 sError("Error: Name '%s' appears to not be available in the network.\n" % compound)
         else:
@@ -898,6 +1374,8 @@ def test_ParseCompound(capsys):
     'n-Beta':'C12c16f3e8910911f982fe6fcd541c35bca59119e',
     'n-Gamma':'Ce4a58113b67f1e7edb22e28123f300f36b763903'
     }
+
+    G.add_nodes_from(G.graph['cmid2node'].values())
 
     # Test KEGG IDs
     assert ParseCompound('C31890',G) == 1
@@ -976,7 +1454,7 @@ def main(infile_name, compound, reaction_limit, n_procs, prune, dicts, network_o
         if target_node == None:
             sys.exit("Error: Target node was not found. Check compound '%s'.\n" % compound)
         path_bins = GeneratePathBins(network, target_node, reaction_limit, n_procs)
-        results = path_bins
+        results = CombinePaths(network, path_bins, n_procs)
 
     # Save network
     if network_out:
