@@ -757,8 +757,11 @@ def test_GeneratePathBins():
 def RemoveIncompleteReactions(network):
     """
     Removes reactions that require reactants not provided as start compounds or
-    as products in other reactions of the network. Does not remove any compound
-    nodes. The process is iterative, as removal of one reaction may make
+    as products in other reactions of the network.
+
+    Removes compound nodes if they are connected only to the affected reaction.
+
+    The process is iterative, as removal of one reaction may make
     additional reactions 'incomplete' in terms of reactant presence.
     """
 
@@ -788,7 +791,15 @@ def RemoveIncompleteReactions(network):
             if network.node[node]['type'] in {'rf','rr'}:
                 if not network.node[node]['c'].issubset(available_comp_nodes):
                     nodes_to_remove.add(node)
-                    nodes_to_remove.add(network.successors(node)[0]) # Reactant nodes have one successors, i.e. a product node
+                    nodes_to_remove.add(network.successors(node)[0]) # Reactant nodes have one successor, i.e. a product node
+                    # Go through and remove compounds directly downstream of the reaction, if they are connected only to this reaction
+                    for comp_node in network.successors(network.successors(node)[0]):
+                        if network.node[comp_node]['type'] != 'c':
+                            sError("Warning: '%s' is not a compound node as expected (successor of %s)" (str(comp_node), str(network.successors(node)[0])))
+                            continue
+                        else:
+                            if network.predecessors(comp_node) == network.successors(node):
+                                nodes_to_remove.add(comp_node)
 
         # Count the number of nodes before purging
         prev_node_count = len(network.nodes())
@@ -829,8 +840,6 @@ def test_RemoveIncompleteReactions():
 
     assert set(G.nodes()) == set([101,102,103,104,105,107,109,110,1,2,3,4,5,6])
     # Reaction nodes 7-10 should be gone
-    # Intermediate compound nodes should not be removed as there might be other,
-    # valid reactions providing routes through them
 
 
 def IdentifyBranchNodes(network, severed=False):
@@ -1003,18 +1012,19 @@ def CombinePaths(network, path_bins, n_procs=1):
         # Identify branch nodes
         branch_nodes = IdentifyBranchNodes(bin_network)
 
-        # For each branch node, list partial paths that may fill the empty spot
+        # For each branch node, list partial paths that may fill the empty spot by their end compound
         partial_paths = {}
         for branch_node in branch_nodes:
             for path in valid_paths:
                 if branch_node in path:
-                    partial_path = UpstreamPartialPath(path, branch_node)
-                    try:
-                        # Only add partial_paths that are not already in the list
-                        if not partial_path in partial_paths[branch_node]:
-                            partial_paths[branch_node].append(partial_path)
-                    except KeyError:
-                        partial_paths[branch_node] = [partial_path]
+                    for comp_node in bin_network.node[branch_node]['c']:
+                        partial_path = UpstreamPartialPath(path, comp_node)
+                        try:
+                            # Only add partial_paths that are not already in the list
+                            if not partial_path in partial_paths[comp_node]:
+                                partial_paths[comp_node].append(partial_path)
+                        except KeyError:
+                            partial_paths[comp_node] = [partial_path]
 
         # Set up a queue that is populated with sets of nodes representing unfinished branched pathway networks
         Work = mp.JoinableQueue()
@@ -1044,25 +1054,31 @@ def CombinePaths(network, path_bins, n_procs=1):
                         output.append(path)
                     # Else the worker generates all possible pathways substituting the severed branch with partial paths previously identified
                     else:
+                        path_irreparable = False
                         for branch_node in severed_branch_nodes:
-                            try:
-                                substitutes = partial_paths[branch_node]
-                                for substitute in substitutes:
-                                    # Only accept substitutes that either add a whole new branch
-                                    #   a - x - x - |
-                                    #               | - b
-                                    #   c - x - x - |
-                                    if set(substitute).intersection(path_nodes) == set([branch_node]):
-                                        more_work.append(set(substitute).union(path))
-                                    # or add a complementary parallel route to the network (rare?)
-                                    #       | - x - x - |
-                                    #   a - |           | - b
-                                    #       | - x - x - |
-                                    if set(substitute[0:2]).issubset(path_nodes) and len(set(substitute).intersection(path_nodes)) < len(substitute):
-                                        more_work.append(set(substitute).union(path))
-                            except KeyError:
-                                sError("Warning: Severed branch node '%s' has no substitutes. Discarding affected pathways.\n")
-                                break
+                            # Find the compound nodes that are missing
+                            for comp_node in path_network.node[branch_node]['c']:
+                                if comp_node not in path_nodes:
+                                    try:
+                                        substitutes = partial_paths[comp_node]
+                                        for substitute in substitutes:
+                                            # Only accept substitutes that either add a whole new branch
+                                            #   a - x - x - |
+                                            #               | - b
+                                            #   c - x - x - |
+                                            if set(substitute).intersection(path_nodes) == set():
+                                                more_work.append(set(substitute).union(path))
+                                            # or add a complementary parallel route to the network (rare?)
+                                            #       | - x - x - |
+                                            #   a - |           | - b
+                                            #       | - x - x - |
+                                            if set(substitute[0:2]).issubset(path_nodes) and len(set(substitute).intersection(path_nodes)) < len(substitute):
+                                                more_work.append(set(substitute).union(path))
+                                    except KeyError:
+                                        sError("Warning: Severed branch node '%s' has no substitutes for compound '%s'. Affected pathway will be discarded.\n" % (branch_node, comp_node))
+                                        path_irreparable = True
+                        if path_irreparable:
+                            more_work = []
                 # Add more work (pathways) to the queue
                 if len(more_work):
                     actual_more_work = []
