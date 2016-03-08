@@ -777,6 +777,11 @@ def AddCompoundNode(graph, compound, start_comp_ids):
         return graph
     if mid in start_comp_ids:
         start = True
+    elif 'C' + mid[1:] in start_comp_ids:
+        start = True
+    elif mid[0] == 'X' and not LimitCarbon(compound, 0):
+        # Make sure that inorganic X compounds are treated as starting compounds
+        start = True
     else:
         start = False
     graph.add_node(N, type='c', mid=mid, start=start)
@@ -796,19 +801,39 @@ def test_AddCompoundNode():
     G2 = nx.DiGraph()
     comp1 = con.get_comps(db, ['Xf5dc8599a48d0111a3a5f618296752e1b53c8d30'])[0]
     comp2 = con.get_comps(db, ['C38a97a9f962a32b984b1702e07a25413299569ab'])[0]
+    comp3 = con.get_comps(db, ['X96ff2c653c25b4f3c6fab12b241ec78bff13a751'])[0] # Phosphate - not listed as start, no carbon
+    comp4 = con.get_comps(db, ['C89b394fd02e5e5e60ae1e167780ea7ab3276288e'])[0]
 
     G2.add_node(1, type='c', mid=comp1['_id'], start=True)
     G2.add_node(2, type='c', mid=comp2['_id'], start=False)
+    G2.add_node(3, type='c', mid=comp3['_id'], start=True)
+    G2.add_node(4, type='c', mid=comp4['_id'], start=True)
 
-    sids = set(['Xf5dc8599a48d0111a3a5f618296752e1b53c8d30'])
+    sids = set(['Cf5dc8599a48d0111a3a5f618296752e1b53c8d30', 'C89b394fd02e5e5e60ae1e167780ea7ab3276288e']) # Note that the X has been replaced with C
 
-    assert nx.is_isomorphic(AddCompoundNode(AddCompoundNode(G1, comp1, sids), comp2, sids), G2)
+    for comp in [comp1, comp2, comp3, comp4]:
+        AddCompoundNode(G1, comp, sids)
+
+    assert nx.is_isomorphic(G1, G2)
+
     assert G1.node[1]['mid'] == G2.node[1]['mid']
     assert G1.node[2]['mid'] == G2.node[2]['mid']
+    assert G1.node[3]['mid'] == G2.node[3]['mid']
+    assert G1.node[4]['mid'] == G2.node[4]['mid']
+
     assert G1.node[1]['start'] == G2.node[1]['start'] == True
     assert G1.node[2]['start'] == G2.node[2]['start'] == False
+    assert G1.node[3]['start'] == G2.node[3]['start'] == True
+    assert G1.node[4]['start'] == G2.node[4]['start'] == True
+
     assert G1.nodes(data=True) == G2.nodes(data=True)
-    assert G1.graph['cmid2node'] == {'Xf5dc8599a48d0111a3a5f618296752e1b53c8d30':1,'C38a97a9f962a32b984b1702e07a25413299569ab':2}
+
+    assert G1.graph['cmid2node'] == {
+        'Xf5dc8599a48d0111a3a5f618296752e1b53c8d30':1,
+        'C38a97a9f962a32b984b1702e07a25413299569ab':2,
+        'X96ff2c653c25b4f3c6fab12b241ec78bff13a751':3,
+        'C89b394fd02e5e5e60ae1e167780ea7ab3276288e':4
+        }
 
 
 def CheckConnection(minetwork, c_node, r_node):
