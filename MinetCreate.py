@@ -924,14 +924,20 @@ def AddQuadReactionNode(graph, rxn):
             rf.add(node)
             pr.add(node)
         except KeyError:
-            pass
+            # If a reactant is missing, the reaction should not be added
+            sys.stderr.write("Warning: Compound '%s' in reaction '%s' is missing. Reaction nodes were not added to the network.\n" % (c_mid, rxn_id))
+            sys.sterr.flush()
+            return graph
     for c_mid in products_f:
         try:
             node = graph.graph['cmid2node'][c_mid]
             pf.add(node)
             rr.add(node)
         except KeyError:
-            pass
+            # If a product is missing, the reaction should not be added
+            sys.stderr.write("Warning: Compound '%s' in reaction '%s' is missing. Reaction nodes were not added to the network.\n" % (c_mid, rxn_id))
+            sys.stderr.flush()
+            return graph
 
     # Create the reaction nodes
     N = len(graph.nodes()) + 1
@@ -968,7 +974,7 @@ def AddQuadReactionNode(graph, rxn):
 
     return graph
 
-def test_AddQuadReactionNode():
+def test_AddQuadReactionNode(capsys):
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     db = "KEGGexp2"
     con = mc.mineDatabaseServices(server_url)
@@ -978,12 +984,13 @@ def test_AddQuadReactionNode():
     r_mid = ['Caf6fc55862387e5fd7cd9635ef9981da7f08a531', 'X25a9fafebc1b08a0ae0fec015803771c73485a61']
     p_mid = ['Cefbaa83ea06e7c31820f93c1a5535e1378aba42b', 'Xf729c487f9b991ec6f645c756cf34b9a20b9e8a4']
     r_node_c = set([1,2])
-    p_node_c = set([3]) # Xf729c487f9... is here not a compound node in the network
+    p_node_c = set([3,4])
 
     G1 = nx.DiGraph()
-    G1.add_node(1, type='c', mid=con.get_comps(db, [r_mid[0]])[0]['_id'], start=False) # r_mid[0] is connected
-    G1.add_node(2, type='c', mid=con.get_comps(db, [r_mid[1]])[0]['_id'], start=True) # r_mid[1] is ATP; not connected
-    G1.add_node(3, type='c', mid=con.get_comps(db, [p_mid[0]])[0]['_id'], start=False) # p_mid[0] is connected
+    G1.add_node(1, type='c', mid=r_mid[0], start=False) # r_mid[0] is connected
+    G1.add_node(2, type='c', mid=r_mid[1], start=True) # r_mid[1] is ATP; not connected
+    G1.add_node(3, type='c', mid=p_mid[0], start=False) # p_mid[0] is connected
+    G1.add_node(4, type='c', mid=p_mid[1], start=False) # r_mid[2] is ADP; not connected
 
     G1.graph['cmid2node'] = {}
     for node in G1.nodes():
@@ -991,29 +998,33 @@ def test_AddQuadReactionNode():
 
     rxn_id = 'R04759e864c86cfd0eaeb079404d5f18dae6c7227'
 
-    G1.add_node(4, type='rf', mid=rxn_id, c=r_node_c) # Forward (intended) direction reactants
-    G1.add_node(5, type='pf', mid=rxn_id, c=p_node_c) # Forward (intended) direction products
-    G1.add_node(6, type='rr', mid=rxn_id, c=p_node_c) # Reverse direction reactants
-    G1.add_node(7, type='pr', mid=rxn_id, c=r_node_c) # Reverse direction products
-    G1.add_edge(4, 5) # Directed edge for the forward reaction
-    G1.add_edge(6, 7) # Directed edge for the reverse reaction
+    G1.add_node(5, type='rf', mid=rxn_id, c=r_node_c) # Forward (intended) direction reactants
+    G1.add_node(6, type='pf', mid=rxn_id, c=p_node_c) # Forward (intended) direction products
+    G1.add_node(7, type='rr', mid=rxn_id, c=p_node_c) # Reverse direction reactants
+    G1.add_node(8, type='pr', mid=rxn_id, c=r_node_c) # Reverse direction products
+    G1.add_edge(5, 6) # Directed edge for the forward reaction
+    G1.add_edge(7, 8) # Directed edge for the reverse reaction
 
     # Edges connecting compound and reaction nodes
-    G1.add_edge(1, 4)
-    #G1.add_edge(2, 4) # ATP should not be connected
-    G1.add_edge(5, 3)
-    G1.add_edge(3, 6)
-    G1.add_edge(7, 1)
-    #G1.add_edge(7, 2) # ATP should not be connected
+    G1.add_edge(1, 5)
+    #G1.add_edge(2, 5) # ATP should not be connected
+    G1.add_edge(6, 3)
+    #G1.add_edge(6, 4) # ADP should not be connected
+    G1.add_edge(3, 7)
+    #G1.add_edge(4, 7) # ADP should not be connected
+    G1.add_edge(8, 1)
+    #G1.add_edge(8, 2) # ATP should not be connected
 
     G2 = nx.DiGraph(mine_data={
     r_mid[0] : con.get_comps(db, [r_mid[0]])[0],
     r_mid[1] : con.get_comps(db, [r_mid[1]])[0],
-    p_mid[0] : con.get_comps(db, [p_mid[0]])[0]
+    p_mid[0] : con.get_comps(db, [p_mid[0]])[0],
+    p_mid[1] : con.get_comps(db, [p_mid[1]])[0]
     })
-    G2.add_node(1, type='c', mid=con.get_comps(db, [r_mid[0]])[0]['_id'], start=False)
-    G2.add_node(2, type='c', mid=con.get_comps(db, [r_mid[1]])[0]['_id'], start=True)
-    G2.add_node(3, type='c', mid=con.get_comps(db, [p_mid[0]])[0]['_id'], start=False)
+    G2.add_node(1, type='c', mid=r_mid[0], start=False)
+    G2.add_node(2, type='c', mid=r_mid[1], start=True)
+    G2.add_node(3, type='c', mid=p_mid[0], start=False)
+    G2.add_node(4, type='c', mid=p_mid[1], start=False)
 
     G2.graph['cmid2node'] = {}
     for node in G2.nodes():
@@ -1030,11 +1041,13 @@ def test_AddQuadReactionNode():
     c2 = {'_id':'C2','Product_of':['R1'],'Reactant_in':['R2']}
     c3 = {'_id':'C3','Product_of':['R2']}
     x1 = {'_id':'X1'}
-    G3 = nx.DiGraph(mine_data={'R1':r1,'R2':r2,'C1':c1,'C2':c2,'C3':c3})
+    x2 = {'_id':'X2'}
+    G3 = nx.DiGraph(mine_data={'R1':r1,'R2':r2,'C1':c1,'C2':c2,'C3':c3,'X1':x1,'X2':x2})
     G3.add_node(1,mid='C1',type='c')
     G3.add_node(2,mid='C2',type='c')
     G3.add_node(3,mid='C3',type='c')
     G3.add_node(4,mid='X1',type='c')
+    G3.add_node(5,mid='X2',type='c')
 
     G3.graph['cmid2node'] = {}
     for node in G3.nodes():
@@ -1044,7 +1057,24 @@ def test_AddQuadReactionNode():
     G3 = AddQuadReactionNode(G3, r2)
 
     assert len(G3.edges()) == 12
-    assert len(G3.nodes()) == 12
+    assert len(G3.nodes()) == 13
+
+
+    G4 = nx.DiGraph()
+    G4.add_node(1, type='c', mid=r_mid[0], start=False)
+    G4.add_node(2, type='c', mid=r_mid[1], start=True)
+    G4.add_node(3, type='c', mid=p_mid[0], start=False)
+    # G4.add_node(4, type='c', mid=p_mid[1], start=False) # Skip this node
+
+    G4.graph['cmid2node'] = {}
+    for node in G4.nodes():
+        G4.graph['cmid2node'][G4.node[node]['mid']] = node
+
+    G4 = AddQuadReactionNode(G4, rxn)
+
+    out, err = capsys.readouterr()
+    assert err == "Warning: Compound 'Xf729c487f9b991ec6f645c756cf34b9a20b9e8a4' in reaction 'R04759e864c86cfd0eaeb079404d5f18dae6c7227' is missing. Reaction nodes were not added to the network.\n"
+    assert len(G4.edges()) == 0
 
 
 def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):

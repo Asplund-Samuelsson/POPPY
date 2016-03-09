@@ -738,7 +738,8 @@ def RemoveIncompleteReactions(network):
     Removes reactions that require reactants not provided as start compounds or
     as products in other reactions of the network.
 
-    Removes compound nodes if they are connected only to the affected reaction.
+    Removes compound nodes if they are connected only to the affected reaction
+    and are not a starting compound.
 
     The process is iterative, as removal of one reaction may make
     additional reactions 'incomplete' in terms of reactant presence.
@@ -772,7 +773,7 @@ def RemoveIncompleteReactions(network):
                             sError("Warning: '%s' is not a compound node as expected (successor of %s)" (str(comp_node), str(network.successors(node)[0])))
                             continue
                         else:
-                            if network.predecessors(comp_node) == network.successors(node):
+                            if network.predecessors(comp_node) == network.successors(node) and not network.node[comp_node]['start']:
                                 nodes_to_remove.add(comp_node)
 
         # Count the number of nodes before purging
@@ -1020,7 +1021,31 @@ def DecisionTree(switch_nodes, paths):
     """
 
 
-def CombinePaths(network, paths):
+def DiGraphConnectedComponent(network, target_node):
+    """
+    Performs a reverse depth-first search to find all nodes that have a path
+    leading to the target node. Then returns that component of the network.
+    """
+    return set(nx.dfs_preorder_nodes(network.reverse(), target_node))
+
+def test_DiGraphConnectedComponent():
+    G = nx.DiGraph()
+    G.add_path([1,2,3,4])
+    G.add_path([1,5,6,7])
+    G.add_path([8,9,10,4])
+    G.add_path([11,12,13,14])
+
+    H = nx.DiGraph()
+    H.add_path([1,2,3,4])
+    H.add_path([8,9,10,4])
+
+    Y = G.subgraph(DiGraphConnectedComponent(G,4))
+
+    assert nx.is_isomorphic(H, Y)
+    assert set(H.nodes()) == set(Y.nodes())
+
+
+def CombinePaths(network, paths, target_node):
 
     sWrite("\nConstructing sub-network from identified paths...\n")
 
@@ -1028,8 +1053,8 @@ def CombinePaths(network, paths):
     path_nodes = set([n for p in paths for n in p])
     start_comp_nodes = FindStartCompNodes(network)
 
-    # Construct a sub-network of all paths and start compounds
-    subnet = network.subgraph(path_nodes.union(product_nodes).union(start_comp_nodes))
+    # Construct a sub-network of all paths, start compounds and produced compounds
+    subnet = network.subgraph(path_nodes.union(start_comp_nodes))
     subnet = network.subgraph(set(subnet.nodes()).union(ProducedNodes(subnet)))
 
     # Identify the incomplete reactions and remove them
@@ -1037,6 +1062,9 @@ def CombinePaths(network, paths):
 
     # Cut connection to start compounds in order to generate terminal (leaf) reactant nodes
     GenerateTermini(subnet)
+
+    # Reduce to the connected component
+    subnet = subnet.subgraph(DiGraphConnectedComponent(subnet, target_node))
 
     # Identify branch nodes
     branch_nodes = IdentifyBranchNodes(subnet)
