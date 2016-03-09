@@ -926,7 +926,7 @@ def AddQuadReactionNode(graph, rxn):
         except KeyError:
             # If a reactant is missing, the reaction should not be added
             sys.stderr.write("Warning: Compound '%s' in reaction '%s' is missing. Reaction nodes were not added to the network.\n" % (c_mid, rxn_id))
-            sys.sterr.flush()
+            sys.stderr.flush()
             return graph
     for c_mid in products_f:
         try:
@@ -1077,14 +1077,53 @@ def test_AddQuadReactionNode(capsys):
     assert len(G4.edges()) == 0
 
 
-def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[]):
+def ExpandStartCompIds(comp_dict, start_comp_ids, extra_kegg_ids=[]):
+    """
+    Expands a set of start compound IDs with those of compounds sharing
+    the same KEGG ID.
+    """
+    start_kegg_ids = set(extra_kegg_ids)
+    for start_comp_id in start_comp_ids:
+        start_comp = comp_dict[start_comp_id]
+        try:
+            start_kegg_ids = start_kegg_ids.union(set(start_comp['DB_links']['KEGG']))
+        except KeyError:
+            pass
+    for comp_id in comp_dict.keys():
+        comp = comp_dict[comp_id]
+        try:
+            if len(set(comp['DB_links']['KEGG']).intersection(start_kegg_ids)):
+                start_comp_ids.add(comp_id)
+        except KeyError:
+            pass
+    return start_comp_ids
+
+def test_ExpandStartCompIds():
+    comp_dict = {
+        'S1':{'_id':'S1','DB_links':{'KEGG':['C00001']}},
+        'S2':{'_id':'S2','DB_links':{'KEGG':['C00002','C00003']}},
+        'S3':{'_id':'S3','DB_links':{}},
+        'S4':{'_id':'S4'},
+        'C1':{'_id':'C1','DB_links':{'KEGG':['C00001']}},
+        'C2':{'_id':'C2','DB_links':{}},
+        'C3':{'_id':'C3'},
+        'C4':{'_id':'C4','DB_links':{'KEGG':['C00002']}},
+        'X1':{'_id':'X1','DB_links':{'KEGG':['C00002','C10284']}},
+        'X5':{'_id':'X5','DB_links':{'KEGG':['C00006','C00007']}},
+        'X6':{'_id':'X6','DB_links':{'KEGG':['C11111']}}
+    }
+    assert ExpandStartCompIds(comp_dict, set(['S1','S2','S3','S4']), ['C11111']) == set(['S1','S2','S3','S4','C1','C4','X1','X6'])
+
+
+def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[]):
     """Constructs a directed graph (network) from the compound and reaction
     dictionaries produced by GetRawNetwork."""
 
     sys.stdout.write("\nConstructing network...\n")
     sys.stdout.flush()
 
-    start_comp_ids = set(start_comp_ids)
+    # ExpandStartCompIds catches "unlisted" compounds with the same KEGG ID
+    start_comp_ids = ExpandStartCompIds(comp_dict, set(start_comp_ids), extra_kegg_ids=extra_kegg_ids)
 
     # Initialise directed graph
     minetwork = nx.DiGraph(mine_data={**comp_dict, **rxn_dict})
@@ -1203,9 +1242,10 @@ def test_ConstructNetwork(capsys):
 # Main code block
 def main(infile_name, step_limit, comp_limit, C_limit, outfile_name):
     # Get starting compound MINE IDs
-    start_ids = list(set(KeggToMineId(ReadCompounds(infile_name)).values()))
+    start_kegg_ids = ReadCompounds(infile_name)
+    start_ids = list(set(KeggToMineId(start_kegg_ids).values()))
     # Create the network
-    minetwork = ConstructNetwork(*GetRawNetwork(start_ids, step_limit, comp_limit, C_limit), start_ids)
+    minetwork = ConstructNetwork(*GetRawNetwork(start_ids, step_limit, comp_limit, C_limit), start_ids, extra_kegg_ids=start_kegg_ids)
     # Save to Pickle
     pickle.dump(minetwork, open(outfile_name, 'wb'))
 

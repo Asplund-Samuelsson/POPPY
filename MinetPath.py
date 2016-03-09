@@ -1045,9 +1045,9 @@ def test_DiGraphConnectedComponent():
     assert set(H.nodes()) == set(Y.nodes())
 
 
-def CombinePaths(network, paths, target_node):
+def PathSubNetwork(network, paths, target_node):
 
-    sWrite("\nConstructing sub-network from identified paths...\n")
+    sWrite("\nConstructing sub-network from identified paths...")
 
     # Acquire basic data
     path_nodes = set([n for p in paths for n in p])
@@ -1066,16 +1066,104 @@ def CombinePaths(network, paths, target_node):
     # Reduce to the connected component
     subnet = subnet.subgraph(DiGraphConnectedComponent(subnet, target_node))
 
-    # Identify branch nodes
-    branch_nodes = IdentifyBranchNodes(subnet)
+    sWrite(" Done.\n")
 
-    # Identify switch nodes
-    switch_nodes = SwitchNodes(subnet)
+    return subnet
 
-    # Recalculate pathways
-    paths_refined = GeneratePaths()
+def test_PathSubNetwork():
+    # Test case has the following in common with test_GeneratePaths:
+    G = nx.DiGraph()
 
-    return finished_pathways
+    G.add_nodes_from([1,4,9,14,22,27,32,37,42,47,52], type='c', start=False)
+    for node in [1,32,37,42,52]: G.node[node]['start'] = True
+
+    rf = [2,7,20,12,101,25,30,35,40,45,55,50]
+    rr = [5,10,23,18,15,28,33,38,43,48,57,53]
+    pf = [x + 1 for x in rf]
+    pr = [x + 1 for x in rr]
+
+    G.add_nodes_from(rf, type='rf')
+    G.add_nodes_from(pf, type='pf')
+    G.add_nodes_from(rr, type='rr')
+    G.add_nodes_from(pr, type='pr')
+
+    G.add_path([1,2,3,4,7,8,9,20,21,22])
+    G.add_path([22,23,24,9,10,11,4,5,6,1])
+    G.add_path([4,12,13,14,101,102,9])
+    G.add_path([9,18,19,14,15,16,4])
+    G.add_path([32,33,34,27,28,29,22])
+    G.add_path([22,25,26,27,30,31,32])
+    G.add_path([22,35,36,37,40,41,42,45,46,47,55,56,22])
+    G.add_path([22,57,58,47,48,49,42,43,44,37,38,39,22])
+    G.add_path([52,53,54,47,50,51,52])
+
+    # Now spice it with a compound that cannot be produced by the network
+    G.add_node(100, type='c', start=False)
+    G.add_edge(100, 28)
+    G.add_edge(26, 100)
+
+    # Finally, list the reactant and product nodes
+    for node in rf + rr: G.node[node]['c'] = set(G.predecessors(node))
+    for node in pf + pr: G.node[node]['c'] = set(G.successors(node))
+
+    paths = GeneratePaths(G, 22, 4, n_procs=4)
+    subnet = PathSubNetwork(G, paths, 22)
+
+    assert set(subnet.nodes()) == set([2,3,4,7,8,12,13,14,101,102,9,20,21,22,56,55,47,54,53,46,45,39,38])
+    assert len(subnet.nodes()) == 23
+    assert len(subnet.edges()) == 23
+
+
+def FormatGraphml(network):
+    # Need to label the origin reactant nodes
+    origins = FindValidReactantNodes(network)
+
+    for node in network.nodes():
+        if network.node[node]['type'] in {'rf','rr'}:
+            if node in origins:
+                network.node[node]['origin'] = True
+            else:
+                network.node[node]['origin'] = False
+
+    # Also need to create compound name labels
+    for node in network.nodes():
+        if network.node[node]['type'] == 'c':
+            try:
+                common_name = network.graph['mine_data'][network.node[node]['mid']]['Names'][0]
+            except KeyError:
+                common_name = network.graph['mine_data'][network.node[node]['mid']]['Formula']
+            network.node[node]['common_name'] = common_name
+
+
+    # Furthermore, label reaction nodes with the reactants or products
+    for node in network.nodes():
+        if network.node[node]['type'] != 'c':
+            c_names = []
+            for c_node in network.node[node]['c']:
+                try:
+                    common_name = network.graph['mine_data'][network.node[c_node]['mid']]['Names'][0]
+                except KeyError:
+                    common_name = network.graph['mine_data'][network.node[c_node]['mid']]['Formula']
+                c_names.append(common_name)
+            network.node[node]['c_names'] = " + ".join(c_names)
+
+    # Copy and remove the incompatible stuff from nodes and graph
+    outnet = network.copy()
+
+    for node in outnet.nodes():
+        if outnet.node[node]['type'] != 'c':
+            del outnet.node[node]['c']
+
+    data_keys = list(outnet.graph.keys())
+    for key in data_keys:
+        del outnet.graph[key]
+
+    return outnet
+
+
+def CombinePaths(network, paths, target_node):
+    # Code here
+    return None
 
 def test_CombinePaths():
     # Set up testing network - Same as for IdentifyBranchNodes
@@ -1361,7 +1449,7 @@ def test_ParseCompound(capsys):
 
 
 # Main code block
-def main(infile_name, compound, reaction_limit, n_procs, prune, dicts, network_out, outfile_name):
+def main(infile_name, compound, reaction_limit, n_procs, prune, dicts, network_out, sub_network_out, outfile_name):
 
     # Default results are empty
     results = {}
@@ -1403,8 +1491,15 @@ def main(infile_name, compound, reaction_limit, n_procs, prune, dicts, network_o
         target_node = ParseCompound(compound, network)
         if target_node == None:
             sys.exit("Error: Target node was not found. Check compound '%s'.\n" % compound)
-        results = GeneratePaths(network, target_node, reaction_limit, n_procs)
-        #results = CombinePaths(network, path_bins, n_procs)
+        paths = GeneratePaths(network, target_node, reaction_limit, n_procs)
+
+        # Save sub-network graphml
+        if sub_network_out:
+            sWrite("\nWriting sub-network to graphml...")
+            subnet = PathSubNetwork(network, paths, target_node)
+            subnet = FormatGraphml(subnet)
+            nx.write_graphml(subnet, sub_network_out)
+            sWrite(" Done.\n")
 
     # Save network
     if network_out:
@@ -1415,7 +1510,7 @@ def main(infile_name, compound, reaction_limit, n_procs, prune, dicts, network_o
     # Save results
     if outfile_name:
         sWrite("\nWriting results to pickle...")
-        pickle.dump(results, open(outfile_name, 'wb'))
+        pickle.dump(paths, open(outfile_name, 'wb'))
         sWrite(" Done.\n")
 
 
@@ -1425,10 +1520,11 @@ if __name__ == "__main__":
     parser.add_argument('infile', help='Read minet network pickle.')
     parser.add_argument('-o', '--outfile', type=str, default=False, help='Save identified pathways in pickle.')
     parser.add_argument('-n', '--network', type=str, default=False, help='Save manipulated network in pickle.')
+    parser.add_argument('-s', '--sub_network', type=str, default=False, help='Save sub-network as graphml (requires -c).')
     parser.add_argument('-c', '--compound', type=str, default=False, help='Target compound.')
     parser.add_argument('-r', '--reactions', type=int, default=5, help='Maximum number of reactions.')
     parser.add_argument('-p', '--processes', type=int, default=1, help='Number of parallel processes to run.')
     parser.add_argument('--prune', action="store_true", help='Prune the network to reachable nodes.')
     parser.add_argument('--dicts', action="store_true", help='Set up KEGG and name target compound selection.')
     args = parser.parse_args()
-    main(args.infile, args.compound, args.reactions, args.processes, args.prune, args.dicts, args.network, args.outfile)
+    main(args.infile, args.compound, args.reactions, args.processes, args.prune, args.dicts, args.network, args.sub_network, args.outfile)
