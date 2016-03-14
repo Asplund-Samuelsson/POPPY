@@ -1084,7 +1084,12 @@ def ExpandStartCompIds(comp_dict, start_comp_ids, extra_kegg_ids=[]):
     """
     start_kegg_ids = set(extra_kegg_ids)
     for start_comp_id in start_comp_ids:
-        start_comp = comp_dict[start_comp_id]
+        try:
+            start_comp = comp_dict[start_comp_id]
+        except KeyError:
+            # Missing start compound IDs missing is not optimal
+            # By-passing them here
+            continue
         try:
             start_kegg_ids = start_kegg_ids.union(set(start_comp['DB_links']['KEGG']))
         except KeyError:

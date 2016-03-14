@@ -1114,41 +1114,41 @@ def test_PathSubNetwork():
     assert len(subnet.edges()) == 23
 
 
-def FormatGraphml(network):
+def FormatGraphml(network, subnet):
     # Need to label the origin reactant nodes
     origins = FindValidReactantNodes(network)
 
-    for node in network.nodes():
-        if network.node[node]['type'] in {'rf','rr'}:
+    for node in subnet.nodes():
+        if subnet.node[node]['type'] in {'rf','rr'}:
             if node in origins:
-                network.node[node]['origin'] = True
+                subnet.node[node]['origin'] = True
             else:
-                network.node[node]['origin'] = False
+                subnet.node[node]['origin'] = False
 
     # Also need to create compound name labels
-    for node in network.nodes():
-        if network.node[node]['type'] == 'c':
+    for node in subnet.nodes():
+        if subnet.node[node]['type'] == 'c':
             try:
                 common_name = network.graph['mine_data'][network.node[node]['mid']]['Names'][0]
             except KeyError:
                 common_name = network.graph['mine_data'][network.node[node]['mid']]['Formula']
-            network.node[node]['common_name'] = common_name
+            subnet.node[node]['common_name'] = common_name
 
 
     # Furthermore, label reaction nodes with the reactants or products
-    for node in network.nodes():
-        if network.node[node]['type'] != 'c':
+    for node in subnet.nodes():
+        if subnet.node[node]['type'] != 'c':
             c_names = []
-            for c_node in network.node[node]['c']:
+            for c_node in subnet.node[node]['c']:
                 try:
                     common_name = network.graph['mine_data'][network.node[c_node]['mid']]['Names'][0]
                 except KeyError:
                     common_name = network.graph['mine_data'][network.node[c_node]['mid']]['Formula']
                 c_names.append(common_name)
-            network.node[node]['c_names'] = " + ".join(c_names)
+            subnet.node[node]['c_names'] = " + ".join(c_names)
 
     # Copy and remove the incompatible stuff from nodes and graph
-    outnet = network.copy()
+    outnet = subnet.copy()
 
     for node in outnet.nodes():
         if outnet.node[node]['type'] != 'c':
@@ -1497,7 +1497,7 @@ def main(infile_name, compound, reaction_limit, n_procs, prune, dicts, network_o
         if sub_network_out:
             sWrite("\nWriting sub-network to graphml...")
             subnet = PathSubNetwork(network, paths, target_node)
-            subnet = FormatGraphml(subnet)
+            subnet = FormatGraphml(network, subnet)
             nx.write_graphml(subnet, sub_network_out)
             sWrite(" Done.\n")
 
