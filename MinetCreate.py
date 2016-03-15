@@ -10,8 +10,394 @@ import pickle
 import time
 import queue
 import threading
+from requests import get as rget
+from rdkit import Chem
 
 # Define functions
+def sWrite(string):
+    sys.stdout.write(string)
+    sys.stdout.flush()
+
+
+def sError(string):
+    sys.stderr.write(string)
+    sys.stderr.flush()
+
+
+def GetKeggText(kegg_id, krest="http://rest.kegg.jp"):
+    """
+    Downloads the raw text entry for the provided KEGG compound or reaction ID,
+    via the KEGG rest API @ http://rest.kegg.jp/
+    """
+
+    # Check ID and construct query
+    if re.fullmatch("^R[0-9]{5}$", kegg_id):
+        # KEGG reactions
+        krest = "/".join([krest,"get","rn:"+kegg_id])
+    elif re.fullmatch("^C[0-9]{5}$", kegg_id):
+        # KEGG compounds
+        krest = "/".join([krest,"get","cpd:"+kegg_id])
+    else:
+        # Invalid ID
+        sError("Warning: '%s' is not a valid KEGG reaction or compound ID.\n" % str(kegg_id))
+        return None
+
+    n = 0
+
+    while True:
+        r = rget(krest)
+        if r.status_code == 200:
+            return r.text
+        else:
+            # Server not returning a result, try again
+            n += 1
+            if n >= 5:
+                sError("Warning: Unable to download KEGG data for '%s'.\n" % str(kegg_id))
+                return None
+            time.sleep(2)
+
+def test_GetKeggText(capsys):
+    kegg1 = "R01393"
+    kegg2 = "C00001"
+    kegg3 = "C99999"
+    kegg4 = "X99999"
+    assert GetKeggText(kegg1) == rget("http://rest.kegg.jp/get/rn:R01393").text
+    assert GetKeggText(kegg2) == rget("http://rest.kegg.jp/get/cpd:C00001").text
+    assert GetKeggText(kegg3) == None
+    assert GetKeggText(kegg4) == None
+    out, err = capsys.readouterr()
+    assert err == "Warning: Unable to download KEGG data for 'C99999'.\nWarning: 'X99999' is not a valid KEGG reaction or compound ID.\n"
+
+
+def KeggRestDict(kegg_text):
+    """
+    Parses a KEGG rest text record into a dictionary. Accepts a single record,
+    as it stops after the first '///'.
+    """
+
+    kegg_dict = {}
+
+    for line in kegg_text.split("\n"):
+        if line == "///":
+            # The first entry ends here
+            break
+        if not line.startswith(" "):
+            line = line.split()
+            key = line[0]
+            line = line[1:]
+            try:
+                kegg_dict[key].extend(line)
+            except KeyError:
+                kegg_dict[key] = line
+        else:
+            try:
+                kegg_dict[key].extend(line.split())
+            except NameError:
+                sError("Warning: KEGG text line '%s' has no key." % line)
+
+    return kegg_dict
+
+def test_KeggRestDict():
+    assert KeggRestDict(GetKeggText("R05735"))['ENZYME'] == ['6.4.1.6']
+    assert KeggRestDict(GetKeggText("C18020"))['FORMULA'] == ['C10H18O2']
+    assert set(KeggRestDict(GetKeggText("C18020")).keys()) == set([
+        "ENTRY","NAME","FORMULA",
+        "EXACT_MASS","MOL_WEIGHT","REACTION",
+        "ENZYME","DBLINKS","ATOM","BOND"
+        ])
+    assert KeggRestDict(GetKeggText("C00999"))['NAME'] == ["Ferrocytochrome","b5"]
+    assert len(KeggRestDict(GetKeggText("C00999"))['ENZYME']) == 21
+    assert KeggRestDict(GetKeggText("R06519"))['EQUATION'][9] == "<=>"
+
+
+def FormatKeggReaction(kegg_text):
+    """Formats a reaction KEGG rest text record in the MINE database format."""
+
+    # Parse the text into a dictionary
+    kegg_dict = KeggRestDict(kegg_text)
+
+    # Check that the needed keys are there
+    # ENZYME is missing for known non-enzymatic reactions
+    if not set(["ENTRY", "EQUATION"]).issubset(kegg_dict.keys()):
+        sError("Warning: The following KEGG record lacks the necessary keys: '%s'" % str(kegg_dict))
+        return None
+
+    # Get the ID
+    _id = kegg_dict['ENTRY'][0]
+
+    # Get the Operators (enzyme ECs)
+    try:
+        Operators = kegg_dict['ENZYME']
+    except KeyError:
+        Operators = ['NA']
+
+    # Re-format the equation
+    reactants = True
+    n = 1
+
+    Reactants = []
+    Products = []
+
+    for segment in kegg_dict['EQUATION']:
+        if segment == "<=>":
+            reactants = False
+            n = 1
+            continue
+        if segment == "+":
+            n = 1
+            continue
+        if re.fullmatch("^[0-9]+$", segment):
+            n = int(segment)
+            continue
+        # If we make it here, we have a compound ID
+        if reactants:
+            Reactants.append([n,segment])
+        else:
+            Products.append([n,segment])
+
+    # Parse the reactant pairs
+    RPair = {}
+    if 'RPAIR' in kegg_dict.keys():
+        p_list = []
+        for segment in kegg_dict['RPAIR']:
+            if segment.startswith('['):
+                continue
+            p_list.append(segment)
+            if len(p_list) == 3:
+                RPair[p_list[0]] = (p_list[1], p_list[2])
+                p_list = []
+        # The p_list should be empty at the end of iteration
+        if len(p_list):
+            sError("Warning: Unexpected format of RPair list '%s'." % str(kegg_dict['RPAIR']))
+
+    return {"_id":_id,"Operators":Operators,"Reactants":Reactants,"Products":Products,"RPair":RPair}
+
+def test_FormatKeggReaction():
+    _id = "R01393"
+    Operators = ["4.1.1.40"]
+    Reactants = [[1,"C00168"]]
+    Products = [[1,"C00266"],[1,"C00011"]]
+    RPair = {"RP01475":("C00168_C00266","main"),"RP06553":("C00011_C00168","leave")}
+    rxn1 = {"_id":_id,"Operators":Operators,"Reactants":Reactants,"Products":Products,"RPair":RPair}
+
+    _id = "R05735"
+    Operators = ["6.4.1.6"]
+    Reactants = [[1,"C00207"],[1,"C00011"],[1,"C00002"],[2,"C00001"]]
+    Products = [[1,"C00164"],[1,"C00020"],[2,"C00009"]]
+    RPair = {
+        "RP00010":("C00002_C00009","ligase"),
+        "RP00274":("C00164_C00207","main"),
+        "RP05676":("C00001_C00009","leave"),
+        "RP05804":("C00011_C00164","leave"),
+        "RP12346":("C00002_C00020","ligase"),
+        "RP12391":("C00002_C00009","ligase")
+    }
+    rxn2 = {"_id":_id,"Operators":Operators,"Reactants":Reactants,"Products":Products,"RPair":RPair}
+
+    _id = "R06519"
+    Operators = ["1.14.19.17"]
+    Reactants = [[1,"C12126"],[2,"C00999"],[1,"C00007"],[2,"C00080"]]
+    Products = [[1,"C00195"],[2,"C00996"],[2,"C00001"]]
+    RPair = {"RP00013":("C00001_C00007","cofac"),"RP05667":("C00195_C12126","main")}
+    rxn3 = {"_id":_id,"Operators":Operators,"Reactants":Reactants,"Products":Products,"RPair":RPair}
+
+    _id = "R00178"
+    Operators = ["4.1.1.50"]
+    Reactants = [[1,"C00019"],[1,"C00080"]]
+    Products = [[1,"C01137"],[1,"C00011"]]
+    RPair = {"RP03935":("C00019_C01137","main"),"RP08122":("C00011_C00019","leave")}
+    rxn4 = {"_id":_id,"Operators":Operators,"Reactants":Reactants,"Products":Products,"RPair":RPair}
+
+    assert FormatKeggReaction(GetKeggText("R01393")) == rxn1
+    assert FormatKeggReaction(GetKeggText("R05735")) == rxn2
+    assert FormatKeggReaction(GetKeggText("R06519")) == rxn3
+    assert FormatKeggReaction(GetKeggText("R00178")) == rxn4
+
+
+def GetKeggMolSmiles(kegg_id, krest="http://rest.kegg.jp"):
+    """Downloads a KEGG compound molecule object and converts it to SMILES."""
+
+    if not re.fullmatch("^C[0-9]{5}$", kegg_id):
+        sError("Warning: '%s' is not a valid KEGG compound ID.\n" % str(kegg_id))
+        return None
+
+    # Set up the query
+    krest = "/".join([krest,"get","cpd:"+kegg_id,"mol"])
+
+    # Contact server (several times if necessary)
+    n = 0
+    while True:
+        r = rget(krest)
+        if r.status_code == 200:
+            mol = Chem.MolFromMolBlock(r.text)
+            if mol == None:
+                sError("Warning: KEGG ID '%s' does not yield a correct molecule object. SMILES not produced.\n" % str(kegg_id))
+                return None
+            else:
+                return Chem.MolToSmiles(mol)
+        else:
+            # Server not returning a result, try again
+            n += 1
+            if n >= 5:
+                sError("Warning: Unable to download molecule data for '%s'.\n" % str(kegg_id))
+                return None
+            time.sleep(2)
+
+def test_GetKeggMolSmiles(capsys):
+    assert GetKeggMolSmiles("C06099") == "C=C(C)C1CC=C(C)CC1"
+    assert GetKeggMolSmiles("C09908") == "Cc1ccc(C(C)C)c(O)c1"
+    assert GetKeggMolSmiles("C06142") == "CCCCO"
+    assert GetKeggMolSmiles("C01412") == "CCCC=O"
+    assert GetKeggMolSmiles("XYZ") == None
+    assert GetKeggMolSmiles("C00999") == None
+    assert GetKeggMolSmiles("C99999") == None
+
+    out, err = capsys.readouterr()
+    assert err == "".join([
+        "Warning: 'XYZ' is not a valid KEGG compound ID.\n",
+        "Warning: Unable to download molecule data for 'C00999'.\n",
+        "Warning: Unable to download molecule data for 'C99999'.\n"
+    ])
+
+def FormatKeggCompound(kegg_text):
+    """Formats a compound KEGG rest text record in the MINE database format."""
+    kegg_dict = KeggRestDict(kegg_text)
+
+    compound = {}
+
+    # Ensure that the kegg_text and kegg_dict is okay
+    if "ENTRY" not in kegg_dict.keys():
+        sError("Warning: The following KEGG record lacks the necessary keys: '%s'" % str(kegg_dict))
+        return None
+
+    # Add ID
+    compound['_id'] = kegg_dict['ENTRY'][0]
+
+    # Add DB_links
+    compound['DB_links'] = {'KEGG':[compound['_id']]}
+
+    # Add SMILES if possible
+    smiles = GetKeggMolSmiles(compound['_id'])
+    if smiles:
+        compound['SMILES'] = smiles
+
+    # Add Names if possible
+    if 'NAME' in kegg_dict.keys():
+        names = []
+        name = []
+        for segment in kegg_dict['NAME']:
+            if segment.endswith(";"):
+                name.append(segment.rstrip(";"))
+                names.append(" ".join(name))
+                name = []
+            else:
+                name.append(segment)
+        if len(name):
+            # Catch trailing name
+            names.append(" ".join(name))
+        compound['Names'] = names
+
+    # Add Formula if possible
+    if 'FORMULA' in kegg_dict.keys():
+        compound['Formula'] = kegg_dict['FORMULA'][0]
+
+    # Add reactions if possible
+    if 'REACTION' in kegg_dict.keys():
+        compound['Reactions'] = kegg_dict['REACTION']
+
+    return compound
+
+def test_FormatKeggCompound():
+    comps = [
+        {"_id" : "C06142",
+        "SMILES" : "CCCCO",
+        "Reactions" : ['R03544','R03545'],
+        "Names" : ['1-Butanol','n-Butanol'],
+        "DB_links" : {'KEGG':['C06142']},
+        "Formula" : "C4H10O"},
+        {"_id" : "C00999",
+        "Reactions" : KeggRestDict(GetKeggText("C00999"))['REACTION'],
+        "Names" : ["Ferrocytochrome b5"],
+        "DB_links" : {'KEGG':['C00999']}},
+        {"_id" : "C00006",
+        "SMILES" : 'NC(=O)c1ccc[n+](C2OC(COP(=O)(O)OP(=O)(O)OCC3OC(n4cnc5c(N)ncnc54)C(OP(=O)(O)O)C3O)C(O)C2O)c1',
+        "Reactions" : KeggRestDict(GetKeggText("C00006"))['REACTION'],
+        "Names" : [
+            "NADP+", "NADP", "Nicotinamide adenine dinucleotide phosphate",
+            "beta-Nicotinamide adenine dinucleotide phosphate", "TPN",
+            "Triphosphopyridine nucleotide", "beta-NADP+"],
+        "DB_links" : {'KEGG':['C00006']},
+        "Formula" : "C21H29N7O17P3"}
+    ]
+
+    for comp in comps:
+        assert comp == FormatKeggCompound(GetKeggText(comp['_id']))
+
+
+def RawKeggIdentifyCofactors(kegg_comp, kegg_rxn_dict):
+    return None
+
+def test_RawKeggIdentifyCofactors():
+    assert False
+
+
+def RawKeggReactantProduct(kegg_comp_dict, kegg_rxn_dict):
+    """
+    Re-organizes reactions of a KEGG compound into 'Reactant_in' and
+    'Product_of' categories based on the information contained in the reactions
+    dictionary.
+    """
+    return None
+
+def test_RawKeggReactantProduct():
+    assert False
+
+
+def GetRawKegg(kegg_comp_ids=[], kegg_rxn_ids=[], krest="http://rest.kegg.jp", n_threads=128, test_limit=0):
+    """
+    Downloads all KEGG compound (C) and reaction (R) records and formats them
+    as MINE database compound or reaction entries. The final output is a tuple
+    containing a compound dictionary and a reaction dictionary.
+
+    Alternatively, downloads only a supplied list of compounds and reactions.
+    """
+
+    # Acquire list of KEGG compound IDs
+    if not len(kegg_comp_ids):
+        r = rget("/".join([krest,"list","compound"]))
+        if r.status_code == 200:
+            for line in r.text.split("\n"):
+                kegg_comp_id = line.split()[0].split(":")[1]
+                kegg_comp_ids.append(kegg_comp_id)
+        else:
+            msg = "Error: Unable to download KEGG rest compound list.\n"
+            sys.exit(msg)
+
+    # Acquire list of KEGG reaction IDs
+    if not len(kegg_rxn_ids):
+        r = rget("/".join([krest,"list","reaction"]))
+        if r.status_code == 200:
+            for line in r.text.split("\n"):
+                kegg_rxn_id = line.split()[0].split(":")[1]
+                kegg_rxn_ids.append(kegg_rxn_id)
+        else:
+            msg = "Error: Unable to download KEGG rest reaction list.\n"
+            sys.exit(msg)
+
+    # Download compounds (threaded)
+
+    # Download reactions (threaded)
+
+    
+
+
+    return (kegg_comp_dict, kegg_rxn_dict)
+
+def test_GetRawKegg():
+
+    assert False
+
+
 def QuickSearch(con, db, query):
     """Wrapper for MineClient3 quick_search() with reconnect functionality."""
     n = 0
@@ -26,13 +412,9 @@ def QuickSearch(con, db, query):
             # Server not responding, try again
             n += 1
             if n % 5 == 0:
-                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), query)
-                sys.stderr.write(message)
-                sys.stderr.flush()
+                sError("Warning: Server not responding after %s attempts ('%s').\n" % (str(n), query))
             if n >= 36:
-                message = "Warning: Connection attempt limit reached. Returning empty list.\n"
-                sys.stderr.write(message)
-                sys.stderr.flush()
+                sError("Warning: Connection attempt limit reached. Returning empty list.\n")
                 return results
             if n <= 12:
                 time.sleep(10)
@@ -57,8 +439,7 @@ def ThreadedQuickSearch(con, db, query_list):
             query = work.get()
             if query is None:
                 break
-            sys.stdout.write("\rHandling quick query '%s'." % str(query))
-            sys.stdout.flush()
+            sWrite("\rHandling quick query '%s'." % str(query))
             output.put(QuickSearch(con, db, query))
             work.task_done()
 
@@ -117,13 +498,9 @@ def GetComp(con, db, comp_id):
             # Server not responding, try again
             n += 1
             if n % 5 == 0:
-                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), comp_id)
-                sys.stderr.write(message)
-                sys.stderr.flush()
+                sError("Warning: Server not responding after %s attempts ('%s').\n" % (str(n), comp_id))
             if n >= 36:
-                message = "Warning: Connection attempt limit reached. Results negative.\n"
-                sys.stderr.write(message)
-                sys.stderr.flush()
+                sError("Warning: Connection attempt limit reached. Results negative.\n")
                 results = None
             if n <= 12:
                 time.sleep(10)
@@ -134,8 +511,7 @@ def GetComp(con, db, comp_id):
     except IndexError or TypeError:
         results = None
     if results == None:
-        sys.stderr.write("Warning: '%s' could not be retrieved from the database.\n" % comp_id)
-        sys.stderr.flush()
+        sError("Warning: '%s' could not be retrieved from the database.\n" % comp_id)
     return results
 
 def test_GetComp():
@@ -156,8 +532,7 @@ def ThreadedGetComps(con, db, comp_id_list):
             comp_id = work.get()
             if comp_id is None:
                 break
-            sys.stdout.write("\rHandling compound query '%s'." % str(comp_id))
-            sys.stdout.flush()
+            sWrite("\rHandling compound query '%s'." % str(comp_id))
             output.put(GetComp(con, db, comp_id))
             work.task_done()
 
@@ -233,13 +608,9 @@ def GetRxn(con, db, rxn_id):
             # Server not responding, try again
             n += 1
             if n % 5 == 0:
-                message = "Warning: Server not responding after %s attempts ('%s').\n" % (str(n), rxn_id)
-                sys.stderr.write(message)
-                sys.stderr.flush()
+                sError("Warning: Server not responding after %s attempts ('%s').\n" % (str(n), rxn_id))
             if n >= 36:
-                message = "Warning: Connection attempt limit reached. Results negative.\n"
-                sys.stderr.write(message)
-                sys.stderr.flush()
+                sError("Warning: Connection attempt limit reached. Results negative.\n")
                 results = None
             if n <= 12:
                 time.sleep(10)
@@ -250,8 +621,7 @@ def GetRxn(con, db, rxn_id):
     except IndexError or TypeError:
         results = None
     if results == None:
-        sys.stderr.write("Warning: '%s' could not be retrieved from the database.\n" % rxn_id)
-        sys.stderr.flush()
+        sError("Warning: '%s' could not be retrieved from the database.\n" % rxn_id)
     return results
 
 
@@ -279,8 +649,7 @@ def ThreadedGetRxns(con, db, rxn_id_list):
             rxn_id = work.get()
             if rxn_id is None:
                 break
-            sys.stdout.write("\rHandling reaction query '%s'." % str(rxn_id))
-            sys.stdout.flush()
+            sWrite("\rHandling reaction query '%s'." % str(rxn_id))
             output.put(GetRxn(con, db, rxn_id))
             work.task_done()
 
@@ -347,8 +716,7 @@ def test_ThreadedGetRxns():
 
 def ReadCompounds(filename):
     """Read a file with KEGG compound IDs."""
-    sys.stdout.write("\nReading compound ID file...\n")
-    sys.stdout.flush()
+    sWrite("\nReading compound ID file...\n")
     compounds = [line.rstrip() for line in open(filename, 'r')]
     for c in compounds:
         if re.fullmatch("^C[0-9]{5}$", c) == None:
@@ -381,8 +749,7 @@ def test_ReadCompounds():
 
 def KeggToMineId(kegg_ids):
     """Translate KEGG IDs to MINE IDs."""
-    sys.stdout.write("\nTranslating from KEGG IDs to MINE IDs...\n")
-    sys.stdout.flush()
+    sWrite("\nTranslating from KEGG IDs to MINE IDs...\n")
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
@@ -393,10 +760,8 @@ def KeggToMineId(kegg_ids):
     for kegg_id in kegg_ids:
         try:
             kegg_comp = kegg_id_dict[kegg_id]
-
         except KeyError:
-            sys.stderr.write("Warning: '%s' is not present in the database.\n" % kegg_id)
-            sys.stderr.flush()
+            sError("Warning: '%s' is not present in the database.\n" % kegg_id)
             continue
     print("\nDone.\n")
     return kegg_id_dict
@@ -419,12 +784,10 @@ def ExtractReactionCompIds(rxn):
     try:
         rxn_id = rxn['_id']
     except KeyError:
-        sys.stderr.write("Warning: '%s' does not have a reaction ID.\n" % str(rxn))
-        sys.stderr.flush()
+        sError("Warning: '%s' does not have a reaction ID.\n" % str(rxn))
         rxn_id = 'UnknownReaction'
     except TypeError:
-        sys.stderr.write("Warning: '%s' is not a valid reaction.\n" % str(rxn))
-        sys.stderr.flush()
+        sError("Warning: '%s' is not a valid reaction.\n" % str(rxn))
         return rxn_comp_ids
 
     # Try to get the reactants
@@ -433,11 +796,9 @@ def ExtractReactionCompIds(rxn):
         try:
             rxn_comp_ids.extend([x[1] for x in rxn_p])
         except IndexError:
-            sys.stderr.write("Warning: The reactant list of '%s' is not valid.\n" % rxn_id)
-            sys.stderr.flush()
+            sError("Warning: The reactant list of '%s' is not valid.\n" % rxn_id)
     except KeyError:
-        sys.stderr.write("Warning: '%s' does not list its reactants.\n" % rxn_id)
-        sys.stderr.flush()
+        sError("Warning: '%s' does not list its reactants.\n" % rxn_id)
 
     # Try to get the products
     try:
@@ -445,11 +806,9 @@ def ExtractReactionCompIds(rxn):
         try:
             rxn_comp_ids.extend([x[1] for x in rxn_p])
         except IndexError:
-            sys.stderr.write("Warning: The product list of '%s' is not valid.\n" % rxn_id)
-            sys.stderr.flush()
+            sError("Warning: The product list of '%s' is not valid.\n" % rxn_id)
     except KeyError:
-        sys.stderr.write("Warning: '%s' does not list its products.\n" % rxn_id)
-        sys.stderr.flush()
+        sError("Warning: '%s' does not list its products.\n" % rxn_id)
 
     return rxn_comp_ids
 
@@ -482,8 +841,7 @@ def LimitCarbon(comp, C_limit=25):
             comp_id = comp['_id']
         except KeyError:
             comp_id = 'UnknownCompound'
-        sys.stderr.write("Warning: Compound '%s' lacks a formula and will pass the C limit." % (comp_id, rxn_id))
-        sys.stderr.flush()
+        sError("Warning: Compound '%s' lacks a formula and will pass the C limit." % (comp_id, rxn_id))
         return False
     match = re.search(regex, formula)
     if match:
@@ -555,8 +913,7 @@ def test_ExtractCompReactionIds():
 def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
     """Download connected reactions and compounds up to the limits."""
 
-    sys.stdout.write("\nDownloading raw network data...\n\n")
-    sys.stdout.flush()
+    sWrite("\nDownloading raw network data...\n\n")
 
     # Set up connection
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
@@ -578,18 +935,15 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
         try:
             comp_id = comp['_id']
         except KeyError:
-            sys.stderr.write("Warning: '%s' is not a valid compound.\n" % str(comp))
-            sys.stderr.flush()
+            sError("Warning: '%s' is not a valid compound.\n" % str(comp))
             continue
         if not LimitCarbon(comp, C_limit):
             comp_dict[comp_id] = comp # Add compound to dict
             comps += 1
         else:
-            sys.stderr.write("Warning: Starting compound '%s' exceeds the C limit and is excluded.\n" % comp_id)
-            sys.stderr.flush()
+            sError("Warning: Starting compound '%s' exceeds the C limit and is excluded.\n" % comp_id)
 
-    sys.stdout.write("\nStep %s finished at %s compounds.\n" % (str(steps), str(comps)))
-    sys.stdout.flush()
+    sWrite("\nStep %s finished at %s compounds.\n" % (str(steps), str(comps)))
 
     extended_comp_ids = set()
     rxn_exceeding_C_limit = set()
@@ -644,8 +998,7 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
             try:
                 comp_id = comp['_id']
             except KeyError:
-                sys.stderr.write("Warning: Compound '%s' lacks an ID and will be skipped.\n" % str(comp))
-                sys.stderr.flush()
+                sError("Warning: Compound '%s' lacks an ID and will be skipped.\n" % str(comp))
                 continue
             comp_cache[comp_id] = comp
 
@@ -656,8 +1009,7 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
             try:
                 rxn_id = rxn['_id']
             except KeyError:
-                sys.stderr.write("Warning: Reaction '%s' lacks an ID and will be skipped.\n" % str(rxn))
-                sys.stderr.flush()
+                sError("Warning: Reaction '%s' lacks an ID and will be skipped.\n" % str(rxn))
                 continue
             rxn_comp_ids = ExtractReactionCompIds(rxn)
             for rxn_comp_id in rxn_comp_ids:
@@ -686,14 +1038,12 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
                 comps += 1
                 # Stop at compound limit here
                 if comps >= comp_limit:
-                    sys.stdout.write("\nStep %s finished at %s compounds.\n" % (str(steps), str(comps)))
-                    sys.stdout.flush()
+                    sWrite("\nStep %s finished at %s compounds.\n" % (str(steps), str(comps)))
                     print("\nDone.")
                     return (comp_dict, rxn_dict)
         # All reactions in the current step have been explored
         extended_comp_ids = extended_comp_ids.union(unextended_comp_ids)
-        sys.stdout.write("\nStep %s finished at %s compounds.\n" % (str(steps), str(comps)))
-        sys.stdout.flush()
+        sWrite("\nStep %s finished at %s compounds.\n" % (str(steps), str(comps)))
     print("\nDone.")
     return (comp_dict, rxn_dict)
 
@@ -772,8 +1122,7 @@ def AddCompoundNode(graph, compound, start_comp_ids):
     try:
         mid = compound['_id']
     except:
-        sys.stderr.write("Warning: Compound '%s' is malformed and will not be added to the network.\n" % str(compound))
-        sys.stderr.flush()
+        sError("Warning: Compound '%s' is malformed and will not be added to the network.\n" % str(compound))
         return graph
     if mid in start_comp_ids:
         start = True
@@ -908,8 +1257,7 @@ def AddQuadReactionNode(graph, rxn):
         rxn_malformed = True
 
     if rxn_malformed:
-        sys.stderr.write("Warning: Reaction '%s' is malformed and will not be added to the network.\n" % str(rxn))
-        sys.stderr.flush()
+        sError("Warning: Reaction '%s' is malformed and will not be added to the network.\n" % str(rxn))
         return graph
 
     # Find the compound nodes of the reactants and the products
@@ -925,8 +1273,7 @@ def AddQuadReactionNode(graph, rxn):
             pr.add(node)
         except KeyError:
             # If a reactant is missing, the reaction should not be added
-            sys.stderr.write("Warning: Compound '%s' in reaction '%s' is missing. Reaction nodes were not added to the network.\n" % (c_mid, rxn_id))
-            sys.stderr.flush()
+            sError("Warning: Compound '%s' in reaction '%s' is missing. Reaction nodes were not added to the network.\n" % (c_mid, rxn_id))
             return graph
     for c_mid in products_f:
         try:
@@ -935,8 +1282,7 @@ def AddQuadReactionNode(graph, rxn):
             rr.add(node)
         except KeyError:
             # If a product is missing, the reaction should not be added
-            sys.stderr.write("Warning: Compound '%s' in reaction '%s' is missing. Reaction nodes were not added to the network.\n" % (c_mid, rxn_id))
-            sys.stderr.flush()
+            sError("Warning: Compound '%s' in reaction '%s' is missing. Reaction nodes were not added to the network.\n" % (c_mid, rxn_id))
             return graph
 
     # Create the reaction nodes
@@ -1124,8 +1470,7 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[]):
     """Constructs a directed graph (network) from the compound and reaction
     dictionaries produced by GetRawNetwork."""
 
-    sys.stdout.write("\nConstructing network...\n")
-    sys.stdout.flush()
+    sWrite("\nConstructing network...\n")
 
     # ExpandStartCompIds catches "unlisted" compounds with the same KEGG ID
     start_comp_ids = ExpandStartCompIds(comp_dict, set(start_comp_ids), extra_kegg_ids=extra_kegg_ids)
@@ -1134,16 +1479,27 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[]):
     minetwork = nx.DiGraph(mine_data={**comp_dict, **rxn_dict})
 
     # Add all compounds
+    n_comp = len(comp_dict)
+    n_done = 0
     for comp_id in sorted(comp_dict.keys()):
         comp = comp_dict[comp_id]
         minetwork = AddCompoundNode(minetwork, comp, start_comp_ids)
+        progress = float(100*n_done/n_comp)
+        sWrite("\rAdding compounds... %0.1f%%" % progress)
+        n_done += 1
 
     # Add all reactions
+    print("")
+    n_rxn = len(rxn_dict)
+    n_done = 0
     for rxn_id in sorted(rxn_dict.keys()):
         rxn = rxn_dict[rxn_id]
         minetwork = AddQuadReactionNode(minetwork, rxn)
+        progress = float(100*n_done/n_rxn)
+        sWrite("\rAdding reactions... %0.1f%%" % progress)
+        n_done += 1
 
-    print("Done.")
+    print("\nDone.")
     return minetwork
 
 def test_ConstructNetwork(capsys):
