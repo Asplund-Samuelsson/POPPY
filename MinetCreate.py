@@ -12,6 +12,8 @@ import queue
 import threading
 from requests import get as rget
 from rdkit import Chem
+from copy import deepcopy
+from itertools import repeat
 
 # Define functions
 def sWrite(string):
@@ -118,12 +120,24 @@ def FormatKeggReaction(kegg_text):
 
     # Check that the needed keys are there
     # ENZYME is missing for known non-enzymatic reactions
-    if not set(["ENTRY", "EQUATION"]).issubset(kegg_dict.keys()):
-        sError("Warning: The following KEGG record lacks the necessary keys: '%s'" % str(kegg_dict))
+
+    # Ensure that there is an ID
+    if "ENTRY" not in kegg_dict.keys():
+        sError("\nWarning: The following KEGG reaction record lacks an ENTRY key: '%s'\n" % str(kegg_dict))
         return None
 
     # Get the ID
     _id = kegg_dict['ENTRY'][0]
+
+    # Check that the record deals with a compound
+    if not re.fullmatch("^R[0-9]{5}$", _id):
+        sError("\nWarning: '%s' is not a valid KEGG compound ID.\n" % str(_id))
+        return None
+
+    # Ensure that there is an EQUATION
+    if "EQUATION" not in kegg_dict.keys():
+        sError("\nWarning: The following KEGG reaction record lacks an EQUATION key: '%s'\n" % str(kegg_dict))
+        return None
 
     # Get the Operators (enzyme ECs)
     try:
@@ -218,7 +232,7 @@ def GetKeggMolSmiles(kegg_id, krest="http://rest.kegg.jp"):
     """Downloads a KEGG compound molecule object and converts it to SMILES."""
 
     if not re.fullmatch("^C[0-9]{5}$", kegg_id):
-        sError("Warning: '%s' is not a valid KEGG compound ID.\n" % str(kegg_id))
+        sError("\nWarning: '%s' is not a valid KEGG compound ID.\n" % str(kegg_id))
         return None
 
     # Set up the query
@@ -231,7 +245,7 @@ def GetKeggMolSmiles(kegg_id, krest="http://rest.kegg.jp"):
         if r.status_code == 200:
             mol = Chem.MolFromMolBlock(r.text)
             if mol == None:
-                sError("Warning: KEGG ID '%s' does not yield a correct molecule object. SMILES not produced.\n" % str(kegg_id))
+                sError("\nWarning: KEGG ID '%s' does not yield a correct molecule object. SMILES not produced.\n" % str(kegg_id))
                 return None
             else:
                 return Chem.MolToSmiles(mol)
@@ -239,7 +253,7 @@ def GetKeggMolSmiles(kegg_id, krest="http://rest.kegg.jp"):
             # Server not returning a result, try again
             n += 1
             if n >= 5:
-                sError("Warning: Unable to download molecule data for '%s'.\n" % str(kegg_id))
+                sError("\nWarning: Unable to download molecule data for '%s'.\n" % str(kegg_id))
                 return None
             time.sleep(2)
 
@@ -254,9 +268,9 @@ def test_GetKeggMolSmiles(capsys):
 
     out, err = capsys.readouterr()
     assert err == "".join([
-        "Warning: 'XYZ' is not a valid KEGG compound ID.\n",
-        "Warning: Unable to download molecule data for 'C00999'.\n",
-        "Warning: Unable to download molecule data for 'C99999'.\n"
+        "\nWarning: 'XYZ' is not a valid KEGG compound ID.\n",
+        "\nWarning: Unable to download molecule data for 'C00999'.\n",
+        "\nWarning: Unable to download molecule data for 'C99999'.\n"
     ])
 
 def FormatKeggCompound(kegg_text):
@@ -265,13 +279,18 @@ def FormatKeggCompound(kegg_text):
 
     compound = {}
 
-    # Ensure that the kegg_text and kegg_dict is okay
+    # Ensure that there is an ID
     if "ENTRY" not in kegg_dict.keys():
-        sError("Warning: The following KEGG record lacks the necessary keys: '%s'" % str(kegg_dict))
+        sError("\nWarning: The following KEGG compound record lacks an ENTRY key: '%s'\n" % str(kegg_dict))
         return None
 
     # Add ID
     compound['_id'] = kegg_dict['ENTRY'][0]
+
+    # Check that the record deals with a compound
+    if not re.fullmatch("^C[0-9]{5}$", compound['_id']):
+        sError("\nWarning: '%s' is not a valid KEGG compound ID.\n" % str(compound['_id']))
+        return None
 
     # Add DB_links
     compound['DB_links'] = {'KEGG':[compound['_id']]}
@@ -334,23 +353,275 @@ def test_FormatKeggCompound():
         assert comp == FormatKeggCompound(GetKeggText(comp['_id']))
 
 
-def RawKeggIdentifyCofactors(kegg_comp, kegg_rxn_dict):
-    return None
+def AllowReactionListing(kegg_comp, kegg_rxn):
+    # Is the compound inorganic or CO2?
+    if not LimitCarbon(kegg_comp, 0) or kegg_comp['_id'] == "C00011":
+        return False
+    # Is the compound CoA or ACP?
+    if kegg_comp['_id'] in {"C00010", "C00229"}:
+        return False
+    # Is the compound involved in a reaction as a cofactor or as part of RP00003?
+    if "RPair" in kegg_rxn.keys():
+        for rp in kegg_rxn['RPair'].items():
+            if kegg_comp['_id'] in rp[1][0] and rp[1][1] == "cofac":
+                return False
+            if kegg_comp['_id'] in rp[1][0] and rp[0] == "RP00003":
+                return False
+    # If the compound passed all the tests, the reaction is free to be listed
+    return True
 
-def test_RawKeggIdentifyCofactors():
-    assert False
+def test_AllowReactionListing():
+    # C1 is not a cofactor
+    cpd = {"_id":"C1", "Reactions":['R1','R2'], "Formula":"C10"}
+    rxn = {"_id":"R1", "RPair":{"RP1":("C1_C2","main"),"RP2":("C3_C4","cofac")}}
+    assert AllowReactionListing(cpd, rxn)
+
+    # C1 is a cofactor
+    rxn = {"_id":"R2", "RPair":{"RP3":("C1_C5","cofac"),"RP4":("C6_C7","main")}}
+    assert not AllowReactionListing(cpd, rxn)
+
+    # C1 is not in an RPair
+    rxn = {"_id":"R1", "RPair":{"RP1":("C5_C2","main"),"RP2":("C3_C4","cofac")}}
+    assert AllowReactionListing(cpd, rxn)
+
+    # ATP/ADP reaction pair should not be listed (RP00003)
+    cpd = {"_id":"C00002", "Reactions":['R1','R2']}
+    rxn = {"_id":"R1", "RPair":{"RP00003":("C00002_C00008","ligase")}}
+    assert not AllowReactionListing(cpd, rxn)
+
+    # ATP might be involved in other reactions
+    cpd = FormatKeggCompound(GetKeggText("C00002"))
+    rxn = FormatKeggReaction(GetKeggText("R00085")) # ATP -> AMP
+    assert AllowReactionListing(cpd, rxn)
+
+    # CoA should not be listed
+    cpd = FormatKeggCompound(GetKeggText("C00010"))
+    rxn = FormatKeggReaction(GetKeggText(cpd['Reactions'][201]))
+    assert not AllowReactionListing(cpd, rxn)
+
+    # ACP should not be listed
+    cpd = FormatKeggCompound(GetKeggText("C00229"))
+    rxn = FormatKeggReaction(GetKeggText(cpd['Reactions'][15]))
+    assert not AllowReactionListing(cpd, rxn)
+
+    # Water is often a cofactor and should not be listed
+    cpd = FormatKeggCompound(GetKeggText("C00001"))
+    rxn = FormatKeggReaction(GetKeggText(cpd['Reactions'][45]))
+    assert not AllowReactionListing(cpd, rxn)
+
+    # Inorganic compounds need to be disallowed
+    cpd = FormatKeggCompound(GetKeggText("C00009"))
+    rxn = FormatKeggReaction(GetKeggText(cpd['Reactions'][167]))
+    assert not AllowReactionListing(cpd, rxn)
+
+    # ...as well as CO2
+    cpd = FormatKeggCompound(GetKeggText("C00011"))
+    rxn = FormatKeggReaction(GetKeggText(cpd['Reactions'][89]))
+    assert not AllowReactionListing(cpd, rxn)
+
+    # Keep single-carbon reduced compounds though
+    cpd = FormatKeggCompound(GetKeggText("C00132")) # Methanol
+    rxn = FormatKeggReaction(GetKeggText(cpd['Reactions'][23]))
+    assert AllowReactionListing(cpd, rxn)
 
 
-def RawKeggReactantProduct(kegg_comp_dict, kegg_rxn_dict):
+
+def SortKeggReactions(kegg_comp_dict, kegg_rxn_dict, verbose=False):
     """
     Re-organizes reactions of a KEGG compound into 'Reactant_in' and
     'Product_of' categories based on the information contained in the reactions
     dictionary.
     """
-    return None
+    # Go through all compounds
+    for kegg_comp_id in kegg_comp_dict.keys():
+        kegg_comp = kegg_comp_dict[kegg_comp_id]
+        # Go through its reactions
+        if "Reactions" in kegg_comp.keys():
+            for rxn_id in kegg_comp["Reactions"]:
+                if rxn_id in kegg_rxn_dict.keys():
+                    rxn = kegg_rxn_dict[rxn_id]
+                else:
+                    if verbose:
+                        sError("Warning: KEGG compound '%s' lists missing reaction '%s'.\n" % (kegg_comp_id, rxn_id))
+                    continue
+                # Check if a reaction listing is allowed
+                if not AllowReactionListing(kegg_comp, rxn):
+                    continue
+                # Add to Reactant_in list
+                if "Reactants" in rxn.keys():
+                    if kegg_comp_id in [x[1] for x in rxn["Reactants"]]:
+                        try:
+                            kegg_comp_dict[kegg_comp_id]['Reactant_in'].append(rxn["_id"])
+                        except KeyError:
+                            kegg_comp_dict[kegg_comp_id]['Reactant_in'] = [rxn["_id"]]
+                # Add to Product_of list
+                if "Products" in rxn.keys():
+                    if kegg_comp_id in [x[1] for x in rxn["Products"]]:
+                        try:
+                            kegg_comp_dict[kegg_comp_id]['Product_of'].append(rxn["_id"])
+                        except KeyError:
+                            kegg_comp_dict[kegg_comp_id]['Product_of'] = [rxn["_id"]]
 
-def test_RawKeggReactantProduct():
-    assert False
+
+
+def test_SortKeggReactions():
+    # C1 is cofactor in one reaction, not in another
+    # C2 is inorganic
+    # C3 is a reactant in one reaction, product in another
+    # C4 is a product of C3, and lists a reaction that doesn't exist
+    # C5 lists a reaction in which it is not listed
+    # C6 does not list reactions
+    kegg_comp_dict = {
+        "C1":{"_id":"C1","Reactions":["R1","R2"],"Formula":"C10H18O2"},
+        "C2":{"_id":"C2","Reactions":["R3","R4"],"Formula":"XeF4"},
+        "C3":{"_id":"C3","Reactions":["R5","R6"],"Formula":"C10H12O3"},
+        "C4":{"_id":"C4","Reactions":["R5","RX"],"Formula":"C2H5O"},
+        "C5":{"_id":"C5","Reactions":["R7"],"Formula":"CH3O"},
+        "C6":{"_id":"C6","Formula":"C12"}
+    }
+    kegg_rxn_dict = {
+        "R1":{"_id":"R1","Reactants":[[1,"C1"]],"Products":[[1,"X1"]],"RPair":{"RP1":("C1_X1","main")}},
+        "R2":{"_id":"R2","Reactants":[[1,"C1"],[1,"C100"]],"Products":[[1,"C101"],[2,"C10"]],"RPair":{"RP2":("C100_C101","main"),"RP3":("C1_C10","cofac")}},
+        "R3":{"_id":"R3","Reactants":[[1,"C2"]],"Products":[[1,"X2"]],"RPair":{"RP4":("C2_X2","main")}},
+        "R4":{"_id":"R3","Reactants":[[1,"Z2"]],"Products":[[1,"C2"]],"RPair":{"RP5":("Z2_C2","main")}},
+        "R5":{"_id":"R5","Reactants":[[1,"C3"],[1,"Z9"]],"Products":[[1,"C4"]],"RPair":{"RP6":("C3_C4","main"),"RP7":("Z9_C4","trans")}},
+        "R6":{"_id":"R6","Reactants":[[1,"C9"]],"Products":[[1,"C8"],[1,"C3"]],"RPair":{"RP8":("C9_C3","main")}},
+        "R7":{"_id":"R7","Reactants":[[1,"X4"]],"Products":[[1,"Z4"]],"RPair":{"RP9":("X4_Z4","main")}}
+    }
+    expected_comp_dict = {
+        "C1":{"_id":"C1","Reactions":["R1","R2"],"Formula":"C10H18O2","Reactant_in":["R1"]},
+        "C2":{"_id":"C2","Reactions":["R3","R4"],"Formula":"XeF4"},
+        "C3":{"_id":"C3","Reactions":["R5","R6"],"Formula":"C10H12O3","Reactant_in":["R5"],"Product_of":["R6"]},
+        "C4":{"_id":"C4","Reactions":["R5","RX"],"Formula":"C2H5O","Product_of":["R5"]},
+        "C5":{"_id":"C5","Reactions":["R7"],"Formula":"CH3O"},
+        "C6":{"_id":"C6","Formula":"C12"}
+    }
+    SortKeggReactions(kegg_comp_dict, kegg_rxn_dict) # Modifies the kegg_comp_dict directly
+    assert kegg_comp_dict == expected_comp_dict
+
+    # How about a real example?
+    # Butanol (C06142)
+    kegg_comp_ids = ["C01412","C00005","C00080","C06142","C00006","C00004","C00003"]
+    kegg_rxn_ids = ["R03545","R03544"]
+    kegg_comp_dict = dict(zip(kegg_comp_ids, [FormatKeggCompound(GetKeggText(x)) for x in kegg_comp_ids]))
+    kegg_rxn_dict = dict(zip(kegg_rxn_ids, [FormatKeggReaction(GetKeggText(x)) for x in kegg_rxn_ids]))
+
+    expected_comp_dict = deepcopy(kegg_comp_dict)
+    expected_comp_dict['C06142']['Product_of'] = ['R03544','R03545']
+    expected_comp_dict['C01412']['Reactant_in'] = ['R03544','R03545']
+
+    SortKeggReactions(kegg_comp_dict, kegg_rxn_dict)
+    assert kegg_comp_dict == expected_comp_dict
+
+
+def GetKeggComps(comp_id_list, num_workers=128):
+    """
+    Threaded implementation of GetKeggText and FormatKeggCompound,
+    taking a list of KEGG compound ids as input.
+    """
+    def Worker():
+        while True:
+            comp_id = work.get()
+            if comp_id is None:
+                break
+            sWrite("\rHandling compound query '%s'." % str(comp_id))
+            output.put(FormatKeggCompound(GetKeggText(comp_id)))
+            work.task_done()
+
+    work = queue.Queue()
+    output = queue.Queue()
+
+    threads = []
+
+    for i in range(num_workers):
+        t = threading.Thread(target=Worker)
+        t.start()
+        threads.append(t)
+
+    for comp_id in comp_id_list:
+        work.put(comp_id)
+
+    # Block until all work is done
+    work.join()
+
+    # Stop workers
+    for i in range(num_workers):
+        work.put(None)
+    for t in threads:
+        t.join()
+
+    # Get the results
+    comps = []
+
+    while not output.empty():
+        comps.append(output.get())
+
+    return comps
+
+def test_GetKeggComps():
+    comp_ids = ["C04625","C13929","C10269","C05119","C02419"]
+    comps_1 = [FormatKeggCompound(GetKeggText(x)) for x in comp_ids]
+    comps_2 = GetKeggComps(comp_ids)
+    assert len(comps_1) == len(comps_2)
+    for comp in comps_1:
+        assert comp in comps_2
+    for comp in comps_2:
+        assert comp in comps_1
+
+
+def GetKeggRxns(rxn_id_list, num_workers=128):
+    """
+    Threaded implementation of GetKeggText and FormatKeggReaction,
+    taking a list of KEGG reaction ids as input.
+    """
+    def Worker():
+        while True:
+            rxn_id = work.get()
+            if rxn_id is None:
+                break
+            sWrite("\rHandling reaction query '%s'." % str(rxn_id))
+            output.put(FormatKeggReaction(GetKeggText(rxn_id)))
+            work.task_done()
+
+    work = queue.Queue()
+    output = queue.Queue()
+
+    threads = []
+
+    for i in range(num_workers):
+        t = threading.Thread(target=Worker)
+        t.start()
+        threads.append(t)
+
+    for rxn_id in rxn_id_list:
+        work.put(rxn_id)
+
+    # Block until all work is done
+    work.join()
+
+    # Stop workers
+    for i in range(num_workers):
+        work.put(None)
+    for t in threads:
+        t.join()
+
+    # Get the results
+    rxns = []
+
+    while not output.empty():
+        rxns.append(output.get())
+
+    return rxns
+
+def test_GetKeggRxns():
+    rxn_ids = ["R10430","R07960","R04715","R07211","R10332"]
+    rxns_1 = [FormatKeggReaction(GetKeggText(x)) for x in rxn_ids]
+    rxns_2 = GetKeggRxns(rxn_ids)
+    assert len(rxns_1) == len(rxns_2)
+    for rxn in rxns_1:
+        assert rxn in rxns_2
+    for rxn in rxns_2:
+        assert rxn in rxns_1
 
 
 def GetRawKegg(kegg_comp_ids=[], kegg_rxn_ids=[], krest="http://rest.kegg.jp", n_threads=128, test_limit=0):
@@ -362,40 +633,120 @@ def GetRawKegg(kegg_comp_ids=[], kegg_rxn_ids=[], krest="http://rest.kegg.jp", n
     Alternatively, downloads only a supplied list of compounds and reactions.
     """
 
+    sWrite("\nDownloading KEGG data via %s/...\n" % krest)
+
     # Acquire list of KEGG compound IDs
     if not len(kegg_comp_ids):
+        sWrite("Downloading KEGG compound list...")
         r = rget("/".join([krest,"list","compound"]))
         if r.status_code == 200:
             for line in r.text.split("\n"):
+                if line == "": break # The end
                 kegg_comp_id = line.split()[0].split(":")[1]
                 kegg_comp_ids.append(kegg_comp_id)
         else:
             msg = "Error: Unable to download KEGG rest compound list.\n"
             sys.exit(msg)
+        sWrite(" Done.\n")
 
     # Acquire list of KEGG reaction IDs
     if not len(kegg_rxn_ids):
+        sWrite("Downloading KEGG reaction list...")
         r = rget("/".join([krest,"list","reaction"]))
         if r.status_code == 200:
             for line in r.text.split("\n"):
+                if line == "": break # The end
                 kegg_rxn_id = line.split()[0].split(":")[1]
                 kegg_rxn_ids.append(kegg_rxn_id)
         else:
             msg = "Error: Unable to download KEGG rest reaction list.\n"
             sys.exit(msg)
+        sWrite(" Done.\n")
+
+    # Limit download length, for testing only
+    if test_limit:
+        kegg_comp_ids = kegg_comp_ids[0:test_limit]
+        kegg_rxn_ids = kegg_rxn_ids[0:test_limit]
 
     # Download compounds (threaded)
+    kegg_comp_dict = {}
+    for comp in GetKeggComps(kegg_comp_ids):
+        if comp == None:
+            continue
+        try:
+            kegg_comp_dict[comp['_id']] = comp
+        except KeyError:
+            sError("Warning: KEGG compound '%s' lacks an ID and will be discarded.\n" % str(comp))
+            continue
+
+    print("")
 
     # Download reactions (threaded)
+    kegg_rxn_dict = {}
+    for rxn in GetKeggRxns(kegg_rxn_ids):
+        if rxn == None:
+            continue
+        try:
+            kegg_rxn_dict[rxn['_id']] = rxn
+        except KeyError:
+            sError("Warning: KEGG compound '%s' lacks an ID and will be discarded.\n" % str(rxn))
+            continue
 
-    
+    print("")
 
+    # Re-organize compound reaction listing, taking cofactor role into account
+    sWrite("Organizing reaction lists...")
+    SortKeggReactions(kegg_comp_dict, kegg_rxn_dict)
+    sWrite(" Done.\n")
 
+    sWrite("KEGG download completed.\n")
     return (kegg_comp_dict, kegg_rxn_dict)
 
-def test_GetRawKegg():
+def test_GetRawKegg_1():
+    # Butanol (C06142)
+    kegg_comp_ids = ["C01412","C00005","C00080","C06142","C00006","C00004","C00003"]
+    kegg_rxn_ids = ["R03545","R03544"]
+    kegg_comp_dict = dict(zip(kegg_comp_ids, [FormatKeggCompound(GetKeggText(x)) for x in kegg_comp_ids]))
+    kegg_rxn_dict = dict(zip(kegg_rxn_ids, [FormatKeggReaction(GetKeggText(x)) for x in kegg_rxn_ids]))
 
-    assert False
+    kegg_comp_dict['C06142']['Product_of'] = ['R03544','R03545']
+    kegg_comp_dict['C01412']['Reactant_in'] = ['R03544','R03545']
+
+    assert GetRawKegg(kegg_comp_ids, kegg_rxn_ids) == (kegg_comp_dict, kegg_rxn_dict)
+
+def test_GetRawKegg_2():
+    # Random sample
+    random_comp_ids = [
+    "C14978","C01268","C09868","C05562","C08104",
+    "C15636","C14337","C00988","C08400","C19305",
+    "C07495","C09986","C04144","C06578","C00508",
+    "C17617","C10048","C16549","C04299","C18093"
+    ]
+
+    random_rxn_ids = []
+
+    for comp_id in random_comp_ids:
+        try:
+            random_rxn_ids.extend(KeggRestDict(GetKeggText(comp_id))['REACTION'])
+        except KeyError:
+            continue
+
+    random_comp_dict = dict(zip(random_comp_ids, [FormatKeggCompound(GetKeggText(x)) for x in random_comp_ids]))
+    random_rxn_dict = dict(zip(random_rxn_ids, [FormatKeggReaction(GetKeggText(x)) for x in random_rxn_ids]))
+    SortKeggReactions(random_comp_dict, random_rxn_dict)
+
+    assert GetRawKegg(random_comp_ids, random_rxn_ids) == (random_comp_dict, random_rxn_dict)
+
+def test_GetRawKegg_3():
+    # First 20 compounds and reactions
+    first_comp_ids = [x.split("\t")[0].split(":")[1] for x in rget("http://rest.kegg.jp/list/compound").text.split("\n")[0:20]]
+    first_rxn_ids = [x.split("\t")[0].split(":")[1] for x in rget("http://rest.kegg.jp/list/reaction").text.split("\n")[0:20]]
+
+    first_comp_dict = dict(zip(first_comp_ids, [FormatKeggCompound(GetKeggText(x)) for x in first_comp_ids]))
+    first_rxn_dict = dict(zip(first_rxn_ids, [FormatKeggReaction(GetKeggText(x)) for x in first_rxn_ids]))
+    SortKeggReactions(first_comp_dict, first_rxn_dict)
+
+    assert GetRawKegg(test_limit=20) == (first_comp_dict, first_rxn_dict)
 
 
 def QuickSearch(con, db, query):
@@ -841,7 +1192,7 @@ def LimitCarbon(comp, C_limit=25):
             comp_id = comp['_id']
         except KeyError:
             comp_id = 'UnknownCompound'
-        sError("Warning: Compound '%s' lacks a formula and will pass the C limit." % (comp_id, rxn_id))
+        sError("Warning: Compound '%s' lacks a formula and will pass the C limit." % (comp_id))
         return False
     match = re.search(regex, formula)
     if match:
@@ -1468,7 +1819,7 @@ def test_ExpandStartCompIds():
 
 def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[]):
     """Constructs a directed graph (network) from the compound and reaction
-    dictionaries produced by GetRawNetwork."""
+    dictionaries produced by GetRawNetwork and/or GetRawKegg."""
 
     sWrite("\nConstructing network...\n")
 
@@ -1599,6 +1950,193 @@ def test_ConstructNetwork(capsys):
             break
     assert t
 
+
+def IsConnectedMineComp(comp_id, network):
+    """Determines if the MINE compound is connected."""
+    if set(['Reactant_in','Product_of']).intersection(network.graph['mine_data'][comp_id].keys()):
+        return True
+    else:
+        return False
+
+def test_IsConnectedMineComp():
+    G = nx.DiGraph()
+    G.graph['mine_data'] = {
+        'C1':{'Reactant_in':[]},
+        'X2':{},
+        'C3':{'Reactant_in':[],'Product_of':[]},
+        'C4':{'Product_of':[]},
+        'C5':{}
+    }
+    assert [IsConnectedMineComp(mid,G) for mid in ['C1','X2','C3','C4','C5']] == [True,False,True,True,False]
+
+
+def KeggMineIntegration(network):
+    """
+    Integrates KEGG and MINE sub-networks
+
+    Transfers incoming and outgoing edges of KEGG nodes to their matching MINE
+    nodes. Integrated KEGG nodes are then removed.
+
+    Does not alter the 'mine_data' dictionary of reactions and compounds.
+    """
+
+    sWrite("\nPerforming KEGG/MINE integration...\n")
+
+    # Set up dictionary that lists MINE IDs for KEGG IDs
+    sWrite("Setting up KEGG to MINE ID dictionary...")
+    kegg_to_mine = {}
+    c_node_count = 0
+    mc_node_count = 0
+    for node in network.nodes():
+        if network.node[node]['type'] == 'c':
+            c_node_count += 1
+            mine_id = network.node[node]['mid']
+            mid_match = re.match('^[CX]{1}[0-9,a-f]{40}$', mine_id)
+            if mid_match:
+                mc_node_count += 1
+                try:
+                    kegg_ids = set(network.graph['mine_data'][mine_id]['DB_links']['KEGG'])
+                except KeyError:
+                    continue
+                for kegg_id in kegg_ids:
+                    try:
+                        kegg_to_mine[kegg_id].add(mine_id)
+                    except KeyError:
+                        kegg_to_mine[kegg_id] = set([mine_id])
+    sWrite(" Done.\n")
+
+    # Go through all KEGG compound nodes and perform transplantation
+    kc_node_count = c_node_count - mc_node_count
+    n = 0
+    for node in network.nodes():
+        if network.node[node]['type'] == 'c':
+            kegg_id = network.node[node]['mid']
+            kegg_match = re.match('^C{1}[0-9]{5}$', compound)
+            if kegg_match:
+                try:
+                    mine_ids = kegg_to_mine[kegg_id]
+                except KeyError:
+                    # No mine_ids found associated with this KEGG node
+                    continue
+            # Get connected reactant nodes (downstream)
+            con_r_nodes = network.successors(node)
+            # Get connected product nodes (upstream)
+            con_p_nodes = network.predecessors(node)
+            # Go through the corresponding MINE nodes
+            for mine_id in mine_ids:
+                mine_node = network.graph['cmid2node'][mine_id]
+                # Transfer connections if the MINE node is connected
+                if IsConnectedMineComp(mine_id, network):
+                    # Incoming edges
+                    network.add_edges_from(zip(con_p_nodes,repeat(mine_node,len(con_p_nodes))))
+                    # Outgoing edges
+                    network.add_edges_from(zip(repeat(mine_node,len(con_r_nodes),con_r_nodes)))
+                # Update KEGG reactant nodes with the new MINE node replacement
+
+
+                # Update KEGG product nodes with the new MINE node replacement
+            # Finally, remove the KEGG node,
+            network.remove_node(node)
+        n += 1
+        progress = float(100 * n / kc_node_count)
+        sWrite("\rTransferring edges... %0.1f%%" % progress)
+    sWrite("\nIntegration completed.\n")
+
+def test_KeggMineIntegration():
+    G = nx.DiGraph()
+
+    # Add KEGG compound nodes
+    G.add_node(1,type='c',mid='C00001',start=True) # 'X490c4e...'     A
+    G.add_node(2,type='c',mid='C00002',start=False) # 'C683de2...'    B
+    G.add_node(3,type='c',mid='C00003',start=False) # 'C069ca5...'    C
+    G.add_node(4,type='c',mid='C00004',start=False) # 'C123097...'    D
+
+    # Add MINE compound nodes
+    G.add_node(5,type='c',mid='X490c4e9c5d9c3b903bab41ff596eca62ed06130d',start=True) #  A
+    G.add_node(6,type='c',mid='C683de2716dd472f4da0a144683d31a10e48a45fc',start=False) # B
+    G.add_node(7,type='c',mid='C069ca544492566919b8c9d20984e55b37a9f79a8',start=False) # C
+    G.add_node(8,type='c',mid='C123097ef07e00abcd707e873bbd09783da730a38',start=False) # D
+
+    # Add KEGG reaction nodes (A<->C and C<->B)
+    G.add_node(9,type='rf',mid='R00001',c=set([1]))
+    G.add_node(10,type='pf',mid='R00001',c=set([3]))
+    G.add_node(11,type='rr',mid='R00001',c=set([3]))
+    G.add_node(12,type='pr',mid='R00001',c=set([1]))
+    G.add_path([1,9,10,3])
+    G.add_path([3,11,12,1])
+
+    G.add_node(13,type='rf',mid='R00002',c=set([3]))
+    G.add_node(14,type='pf',mid='R00002',c=set([2]))
+    G.add_node(15,type='rr',mid='R00002',c=set([2]))
+    G.add_node(16,type='pr',mid='R00002',c=set([3]))
+    G.add_path([3,13,14,2])
+    G.add_path([2,15,16,3])
+
+    # Add MINE reaction nodes (Disconnected A<->C and B<->D)
+    G.add_node(17,type='rf',mid='Rf2279c67b1b433641502020c3ddd46b911827b88',c=set([5]))
+    G.add_node(18,type='pf',mid='Rf2279c67b1b433641502020c3ddd46b911827b88',c=set([7]))
+    G.add_node(19,type='rr',mid='Rf2279c67b1b433641502020c3ddd46b911827b88',c=set([7]))
+    G.add_node(20,type='pr',mid='Rf2279c67b1b433641502020c3ddd46b911827b88',c=set([5]))
+    G.add_path([17,18,7])
+    G.add_path([7,19,20])
+
+    G.add_node(21,type='rf',mid='Re9283748451e3dc8254bcd45342926db929b2176',c=set([6]))
+    G.add_node(22,type='pf',mid='Re9283748451e3dc8254bcd45342926db929b2176',c=set([8]))
+    G.add_node(23,type='rr',mid='Re9283748451e3dc8254bcd45342926db929b2176',c=set([8]))
+    G.add_node(24,type='pr',mid='Re9283748451e3dc8254bcd45342926db929b2176',c=set([6]))
+    G.add_path([6,21,22,8])
+    G.add_path([8,23,24,6])
+
+    # Add mine_data dictionary to network
+    G.graph['mine_data'] = {
+        'C00001':{"DB_links":{'KEGG':['C00001']},'Reactant_in':['R00001']},
+        'X490c4e9c5d9c3b903bab41ff596eca62ed06130d':{"DB_links":{'KEGG':['C00001']}},
+        'C00002':{"DB_links":{'KEGG':['C00002']},'Product_of':['R00002']},
+        'C683de2716dd472f4da0a144683d31a10e48a45fc':{"DB_links":{'KEGG':['C00002']},'Reactant_in':['Re9283748451e3dc8254bcd45342926db929b2176']},
+        'C00003':{"DB_links":{'KEGG':['C00003']},'Reactant_in':['R00002'],'Product_of':['R00001']},
+        'C069ca544492566919b8c9d20984e55b37a9f79a8':{"DB_links":{'KEGG':['C00003']},'Product_of':['Rf2279c67b1b433641502020c3ddd46b911827b88']},
+        'C00004':{"DB_links":{'KEGG':['C00004']}},
+        'C123097ef07e00abcd707e873bbd09783da730a38':{"DB_links":{'KEGG':['C00004']},'Product_of':['Re9283748451e3dc8254bcd45342926db929b2176']},
+        'R00001':{},
+        'Rf2279c67b1b433641502020c3ddd46b911827b88':{},
+        'R00002':{},
+        'Re9283748451e3dc8254bcd45342926db929b2176':{}
+    }
+
+    # Copy and integrate
+    H = G.copy()
+    KeggMineIntegration(H)
+
+    # A new path should have been introduced
+    assert not nx.has_path(G, 6, 8)
+    assert nx.has_path(H, 6, 8)
+
+    # Node 5 should stay disconnected
+    assert len(G.predecessors(5)) == len(G.successors(5)) == len(H.predecessors(5)) == len(H.successors(5)) == 0
+
+    # Four nodes should have been removed
+    nodes_removed = True
+    for node in [1,2,3,4]:
+        try:
+            x = H.node[node]
+        except KeyError:
+            continue
+        nodes_removed = False
+    assert nodes_removed
+
+    # Every reaction node should have the correct c node set
+    c_sets = [set([x]) for x in [5,7,7,5,7,6,6,7,5,7,7,5,6,8,8,6]]
+    assert sum([H.node[en[0]+9]['c'] == en[1] for en in enumerate(c_sets)]) == 20
+
+    # All connections must be transferred correctly
+    expected_edges = set([
+        (9,10), (11,12), (13,14), (15,16), (17,18), (19,20), (21,22), (23,24),
+        (10,7), (7,11),
+        (7,13), (14,6), (6,15), (16,7),
+        (18,7), (7,18),
+        (6,21), (22,8), (8,23), (24,6)
+    ])
+    assert set(H.edges()) == expected_edges
 
 # Main code block
 def main(infile_name, step_limit, comp_limit, C_limit, outfile_name):
