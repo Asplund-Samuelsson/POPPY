@@ -2,7 +2,6 @@
 
 # Import modules
 import networkx as nx
-import MineClient3 as mc
 import re
 import sys
 import argparse
@@ -15,17 +14,12 @@ from rdkit import Chem
 from copy import deepcopy
 from itertools import repeat
 
+# Import scripts
+import MineClient3 as mc
+from MinetHelpers import *
+from MinetOriginHelpers import *
+
 # Define functions
-def sWrite(string):
-    sys.stdout.write(string)
-    sys.stdout.flush()
-
-
-def sError(string):
-    sys.stderr.write(string)
-    sys.stderr.flush()
-
-
 def GetKeggText(kegg_id, krest="http://rest.kegg.jp"):
     """
     Downloads the raw text entry for the provided KEGG compound or reaction ID,
@@ -1818,8 +1812,10 @@ def test_ExpandStartCompIds():
 
 
 def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[]):
-    """Constructs a directed graph (network) from the compound and reaction
-    dictionaries produced by GetRawNetwork and/or GetRawKegg."""
+    """
+    Constructs a directed graph (network) from the compound and reaction
+    dictionaries produced by GetRawNetwork and/or GetRawKegg.
+    """
 
     sWrite("\nConstructing network...\n")
 
@@ -1982,6 +1978,15 @@ def KeggMineIntegration(network):
 
     sWrite("\nPerforming KEGG/MINE integration...\n")
 
+    # Identify KEGG compound nodes
+    sWrite("Identifying KEGG compound nodes...")
+    kegg_comp_nodes = []
+    for node in network.nodes():
+        if network.node[node]['type'] == 'c':
+            if re.match('^C{1}[0-9]{5}$', network.node[node]['mid']):
+                kegg_comp_nodes.append(node)
+    sWrite(" Done.\n")
+
     # Set up dictionary that lists MINE IDs for KEGG IDs
     sWrite("Setting up KEGG to MINE ID dictionary...")
     kegg_to_mine = {}
@@ -2005,41 +2010,96 @@ def KeggMineIntegration(network):
                         kegg_to_mine[kegg_id] = set([mine_id])
     sWrite(" Done.\n")
 
+    # Set up dictionary that lists disconnected nodes for KEGG nodes
+    sWrite("Setting up disconnected KEGG node dictionary...")
+    kegg_node_dis_nodes = {}
+    for node in network.nodes():
+        rxn_id = network.node[node]['mid']
+        kegg_match = re.match('^R[0-9]{5}$', rxn_id)
+        if kegg_match:
+            if network.node[node]['type'] in {'rf','rr'}:
+                for c_node in network.node[node]['c']:
+                    if not network.has_edge(c_node, node):
+                        try:
+                            kegg_node_dis_nodes[c_node].add(node)
+                        except KeyError:
+                            kegg_node_dis_nodes[c_node] = set([node])
+            if network.node[node]['type'] in {'pf','pr'}:
+                for c_node in network.node[node]['c']:
+                    if not network.has_edge(node, c_node):
+                        try:
+                            kegg_node_dis_nodes[c_node].add(node)
+                        except KeyError:
+                            kegg_node_dis_nodes[c_node] = set([node])
+
+    sWrite(" Done.\n")
+
     # Go through all KEGG compound nodes and perform transplantation
     kc_node_count = c_node_count - mc_node_count
     n = 0
-    for node in network.nodes():
-        if network.node[node]['type'] == 'c':
-            kegg_id = network.node[node]['mid']
-            kegg_match = re.match('^C{1}[0-9]{5}$', compound)
-            if kegg_match:
-                try:
-                    mine_ids = kegg_to_mine[kegg_id]
-                except KeyError:
-                    # No mine_ids found associated with this KEGG node
-                    continue
-            # Get connected reactant nodes (downstream)
-            con_r_nodes = network.successors(node)
-            # Get connected product nodes (upstream)
-            con_p_nodes = network.predecessors(node)
-            # Go through the corresponding MINE nodes
-            for mine_id in mine_ids:
-                mine_node = network.graph['cmid2node'][mine_id]
-                # Transfer connections if the MINE node is connected
-                if IsConnectedMineComp(mine_id, network):
-                    # Incoming edges
-                    network.add_edges_from(zip(con_p_nodes,repeat(mine_node,len(con_p_nodes))))
-                    # Outgoing edges
-                    network.add_edges_from(zip(repeat(mine_node,len(con_r_nodes),con_r_nodes)))
-                # Update KEGG reactant nodes with the new MINE node replacement
-
-
-                # Update KEGG product nodes with the new MINE node replacement
-            # Finally, remove the KEGG node,
-            network.remove_node(node)
+    for kc_node in kegg_comp_nodes:
         n += 1
         progress = float(100 * n / kc_node_count)
         sWrite("\rTransferring edges... %0.1f%%" % progress)
+        kegg_id = network.node[kc_node]['mid']
+        try:
+            mine_ids = kegg_to_mine[kegg_id]
+        except KeyError:
+            # No mine_ids found associated with this KEGG node
+            continue
+        # Ensure that there is no more than one connected MINE compound
+        # node and one disconnected MINE compound node
+        n_con = 0
+        n_dis = 0
+        for mine_id in mine_ids:
+            if IsConnectedMineComp(mine_id, network):
+                n_con += 1
+            else:
+                n_dis += 1
+        # Get connected reactant nodes (downstream)
+        con_r_nodes = network.successors(kc_node)
+        # Get connected product nodes (upstream)
+        con_p_nodes = network.predecessors(kc_node)
+        # Get disconnected reactant and product nodes
+        try:
+            dis_nodes = kegg_node_dis_nodes[kc_node]
+        except KeyError:
+            dis_nodes = set()
+        # Go through the corresponding MINE nodes
+        for mine_id in mine_ids:
+            mine_node = network.graph['cmid2node'][mine_id]
+            # Transfer connections to the MINE twin
+            if n_con <= 1:
+                if IsConnectedMineComp(mine_id, network):
+                    # Incoming edges, from product nodes
+                    network.add_edges_from(zip(con_p_nodes,repeat(mine_node,len(con_p_nodes))))
+                    network.remove_edges_from(zip(con_p_nodes,repeat(kc_node, len(con_p_nodes))))
+                    # Outgoing edges, to reactant nodes
+                    network.add_edges_from(zip(repeat(mine_node,len(con_r_nodes)),con_r_nodes))
+                    network.remove_edges_from(zip(repeat(kc_node, len(con_r_nodes)),con_r_nodes))
+                    # Update KEGG reactant nodes with the MINE replacement
+                    for con_r_node in con_r_nodes:
+                        network.node[con_r_node]['c'].add(mine_node)
+                        network.node[con_r_node]['c'].discard(kc_node)
+                    # Update KEGG product nodes with the MINE replacement
+                    for con_p_node in con_p_nodes:
+                        network.node[con_p_node]['c'].add(mine_node)
+                        network.node[con_p_node]['c'].discard(kc_node)
+            else:
+                sError("Warning: KEGG ID '%s' has more than one connected MINE twin.\n" % kegg_id)
+            if n_dis <= 1:
+                if not IsConnectedMineComp(mine_id, network):
+                    # Product and reactant nodes will be updated, but no edges will be transferred
+                    for dis_node in dis_nodes:
+                        network.node[dis_node]['c'].add(mine_node)
+                        network.node[dis_node]['c'].discard(kc_node)
+            else:
+                sError("Warning: KEGG ID '%s' has more than one disconnected MINE twin.\n" % kegg_id)
+            # A KEGG node with connections, without a twin with connections, is kept as it is
+            pass
+            # A KEGG node that is disconnected, without a twin that is disconnected, is kept as it is
+            pass
+
     sWrite("\nIntegration completed.\n")
 
 def test_KeggMineIntegration():
@@ -2103,59 +2163,531 @@ def test_KeggMineIntegration():
         'Re9283748451e3dc8254bcd45342926db929b2176':{}
     }
 
+    # Add the cmid2node dictionary to the network
+    G.graph['cmid2node'] = dict(zip([G.node[n]['mid'] for n in range(1,9)],range(1,9)))
+
     # Copy and integrate
     H = G.copy()
     KeggMineIntegration(H)
 
     # A new path should have been introduced
-    assert not nx.has_path(G, 6, 8)
-    assert nx.has_path(H, 6, 8)
+    assert not nx.has_path(G, 6, 7)
+    assert nx.has_path(H, 6, 7)
 
     # Node 5 should stay disconnected
     assert len(G.predecessors(5)) == len(G.successors(5)) == len(H.predecessors(5)) == len(H.successors(5)) == 0
 
-    # Four nodes should have been removed
-    nodes_removed = True
-    for node in [1,2,3,4]:
-        try:
-            x = H.node[node]
-        except KeyError:
-            continue
-        nodes_removed = False
-    assert nodes_removed
+    # Check the expected connection status of the KEGG nodes
+    assert (H.predecessors(1), H.successors(1)) == ([12],[9])
+    assert (H.predecessors(2), H.successors(2)) == ([],[])
+    assert (H.predecessors(3), H.successors(3)) == ([],[])
+    assert (H.predecessors(4), H.successors(4)) == ([],[])
 
     # Every reaction node should have the correct c node set
-    c_sets = [set([x]) for x in [5,7,7,5,7,6,6,7,5,7,7,5,6,8,8,6]]
-    assert sum([H.node[en[0]+9]['c'] == en[1] for en in enumerate(c_sets)]) == 20
+    c_sets = [set([x]) for x in [1,7,7,1,7,6,6,7,5,7,7,5,6,8,8,6]]
+    assert sum([H.node[en[0]+9]['c'] == en[1] for en in enumerate(c_sets)]) == 16
 
     # All connections must be transferred correctly
     expected_edges = set([
         (9,10), (11,12), (13,14), (15,16), (17,18), (19,20), (21,22), (23,24),
+        (1,9), (12,1),
         (10,7), (7,11),
         (7,13), (14,6), (6,15), (16,7),
-        (18,7), (7,18),
+        (18,7), (7,19),
         (6,21), (22,8), (8,23), (24,6)
     ])
     assert set(H.edges()) == expected_edges
 
+    # The function should not do anything with non-KEGG reaction nodes
+    # or the raw reaction/compound dictionary
+    assert G.graph['mine_data'] == H.graph['mine_data']
+    assert G.graph['cmid2node'] == H.graph['cmid2node']
+    for node in range(17,25):
+        assert G.node[node] == H.node[node]
+
+    # Test multiple MINE node situations
+
+    # Compound dict
+    comp_dict = {
+        'C00001':{'_id':'C00001','Reactant_in':['R00001'],'DB_links':{'KEGG':['C00001']}},
+        'C00002':{'_id':'C00002','Product_of':['R00001'],'DB_links':{'KEGG':['C00002']}},
+        'C00003':{'_id':'C00003','Product_of':['R00002'],'DB_links':{'KEGG':['C00003']}},
+        'C123097ef07e00abcd707e873bbd09783da730a38':{'_id':'C123097ef07e00abcd707e873bbd09783da730a38','Reactant_in':['R12f097ef07e00abcd707e873bbd09783da730a38'],'DB_links':{'KEGG':['C00001']}},
+        'X123097ef07e00abcd707e873bbd09783da730a38':{'_id':'X123097ef07e00abcd707e873bbd09783da730a38','DB_links':{'KEGG':['C00001']}},
+        'C31095054707709e8798fbbd89707d0987c8d897c':{'_id':'C31095054707709e8798fbbd89707d0987c8d897c','Product_of':['Rfeb4b35607e00abcd707e873bbd09783da730a38','R12f097ef07e00abcd707e873bbd09783da730a38']}
+    }
+
+    # Reaction dict
+    rxn_dict = {
+        'R00001':{'_id':'R00001','Reactants':[[1,'C00001']],'Products':[[1,'C00002']]},
+        'R00002':{'_id':'R00002','Reactants':[[1,'C00001']],'Products':[[1,'C00003']]},
+        'R12f097ef07e00abcd707e873bbd09783da730a38':{'_id':'R12f097ef07e00abcd707e873bbd09783da730a38','Reactants':[[1,'C123097ef07e00abcd707e873bbd09783da730a38']],'Products':[[1,'C31095054707709e8798fbbd89707d0987c8d897c']]},
+        'Rfeb4b35607e00abcd707e873bbd09783da730a38':{'_id':'Rfeb4b35607e00abcd707e873bbd09783da730a38','Reactants':[[1,'X123097ef07e00abcd707e873bbd09783da730a38']],'Products':[[1,'C31095054707709e8798fbbd89707d0987c8d897c']]}
+    }
+
+    # Construct network
+    Y = ConstructNetwork(comp_dict, rxn_dict)
+    X = Y.copy()
+
+    # Integrate X but not Y
+    KeggMineIntegration(X)
+
+    # C00001 is connected in R00001 and disconnected in R00002.
+    # R00001 should be connected to C123097ef07e00abcd707e873bbd09783da730a38
+    # R00002 should list X123097ef07e00abcd707e873bbd09783da730a38 as a reactant, but remain disconnected
+    for node in X.nodes():
+        if X.node[node]['mid'] == 'R00001' and X.node[node]['type'] == 'rf':
+            assert X.node[node]['c'] == set([X.graph['cmid2node']['C123097ef07e00abcd707e873bbd09783da730a38']])
+            assert X.predecessors(node) == [X.graph['cmid2node']['C123097ef07e00abcd707e873bbd09783da730a38']]
+        if X.node[node]['mid'] == 'R00002' and X.node[node]['type'] == 'rf':
+            assert X.node[node]['c'] == set([X.graph['cmid2node']['X123097ef07e00abcd707e873bbd09783da730a38']])
+            assert X.predecessors(node) == []
+
+    # Test functinality when multiple KEGG IDs point to the same compound
+    G = nx.DiGraph()
+
+    # Add compound nodes
+    G.add_node(1,type='c',mid='C10000')
+    G.add_node(2,type='c',mid='C20000')
+    G.add_node(3,type='c',mid='C123097ef07e00abcd707e873bbd09783da730a38')
+
+    # Add reaction nodes
+    G.add_node(10,type='pf',mid='R10000',c=set([1]))
+    G.add_node(20,type='rr',mid='R20000',c=set([2]))
+    G.add_node(30,type='rf',mid='R123097ef07e00abcd707e873bbd09783da730a38',c=set([3]))
+
+    # Add edges
+    G.add_edge(10,1)
+    G.add_edge(2,20)
+    G.add_edge(3,30)
+
+    # Add the cmid2node and mine_data dictionaries
+    G.graph['cmid2node'] = {'C10000':1,'C20000':2,'C123097ef07e00abcd707e873bbd09783da730a38':3}
+    G.graph['mine_data'] = {
+        'C10000':{'Product_of':['R10000'],'DB_links':{'KEGG':['C10000']}},
+        'C20000':{'Reactant_in':['R20000'],'DB_links':{'KEGG':['C20000']}},
+        'C123097ef07e00abcd707e873bbd09783da730a38':{'Reactant_in':['R123097ef07e00abcd707e873bbd09783da730a38'],'DB_links':{'KEGG':['C10000','C20000']}}
+    }
+
+    # Integrate and make sure that connections have been transferred
+    KeggMineIntegration(G)
+
+    assert G.node[10]['c'] == G.node[20]['c'] == G.node[30]['c'] == set([3])
+    assert set(G.edges()) == set([(10,3),(3,20),(3,30)])
+
+
+def ExpandValidCompoundSet(network, proc_num=1, valid_reactant_nodes=set(), comp_node_set=set(), force_parallel=False):
+    """Expands the valid compound set with products of valid reactant nodes."""
+    if comp_node_set == set():
+        comp_node_set = FindStartCompNodes(network)
+    else:
+        # Define the Worker
+        def Worker(work):
+            compounds = set()
+            for r_node in work:
+                p_node = network.successors(r_node)[0]
+                products = network.node[p_node]['c']
+                compounds = compounds.union(products)
+            output.extend(compounds)
+
+        # Only go parallel if there are 5k or more items
+        if len(valid_reactant_nodes) < 5000 and not force_parallel:
+            output = []
+            Worker(valid_reactant_nodes)
+            comp_node_set = comp_node_set.union(set(output))
+
+        else:
+            with mp.Manager() as manager:
+                # Initialize output list in manager
+                output = manager.list()
+
+                # Initialize processes
+                procs = []
+                for work in Chunks(list(valid_reactant_nodes), proc_num):
+                    p = mp.Process(target=Worker, args=(work,))
+                    procs.append(p)
+                    p.start()
+
+                # Stop workers
+                for p in procs:
+                    p.join()
+
+                # Get results
+                comp_node_set = comp_node_set.union(set(output))
+
+    return comp_node_set
+
+def test_ExpandValidCompoundSet():
+    G = nx.DiGraph()
+    G.add_node(1,type='c',start=True)
+    G.add_node(2,type='rf',c={1})
+    G.add_node(3,type='pf',c={4})
+    G.add_node(4,type='c',start=False)
+    G.add_path([1,2,3,4])
+    G.add_node(9,type='rr',c={4})
+    G.add_node(10,type='pr',c={1})
+    G.add_path([4,9,10,1])
+    G.add_node(5,type='c',start=False)
+    G.add_node(6,type='rf',c={1,5})
+    G.add_node(7,type='pf',c={8})
+    G.add_node(8,type='c',start=False)
+    G.add_path([1,6,7,8])
+    G.add_edge(5,6)
+    G.add_node(11,type='rr',c={8})
+    G.add_node(12,type='pr',c={1,5})
+    G.add_path([8,11,12,1])
+    G.add_edge(12,5)
+
+    assert ExpandValidCompoundSet(G) == set([1])
+    assert ExpandValidCompoundSet(G, force_parallel=True) == set([1])
+
+    assert ExpandValidCompoundSet(G, 4, set([2,9]), set([1,4])) == set([1,4])
+    assert ExpandValidCompoundSet(G, 4, set([2,9]), set([1,4]), force_parallel=True) == set([1,4])
+
+    assert ExpandValidCompoundSet(G, 4, FindValidReactantNodes(G, 4, set([8])), set([8])) == set([1,5,8])
+    assert ExpandValidCompoundSet(G, 4, FindValidReactantNodes(G, 4, set([8]), force_parallel=True), set([8]), force_parallel=True) == set([1,5,8])
+
+    assert ExpandValidCompoundSet(G, 4, set([2,6,11]), ExpandValidCompoundSet(G, 4, set([11]), set([8]))) == set([1,4,5,8])
+    assert ExpandValidCompoundSet(G, 4, set([2,6,11]), ExpandValidCompoundSet(G, 4, set([11]), set([8]), force_parallel=True), force_parallel=True) == set([1,4,5,8])
+
+
+def DistanceToOrigin(network, proc_num=1, N=-1):
+    """
+    Calculates the shortest distance (number of reactions) from the starting compounds (origin) to
+    every node up to distance N. Set N to -1 to exhaustively calculate the minimum distance to
+    every node that is reachable.
+
+    Returns two sets in a tuple: Valid compound nodes and valid reactant nodes.
+    """
+
+    sWrite("\nCalculating minimum distance of nodes to origin...\n\n")
+
+    time_start = time.time()
+
+    # Number of nodes for formatting
+    L = len(network.nodes())
+    l = len(str(L))
+
+    # Set up counters
+    n = 0
+    c = 0
+    rf = 0
+    pf = 0
+    rr = 0
+    pr = 0
+
+    # Start with no valid reactant or compound nodes
+    valid_reactant_nodes = set([])
+    valid_compound_nodes = set([])
+
+    # The "previous" lists are also empty
+    prev_vrn = list(valid_reactant_nodes)
+    prev_vcn = list(valid_compound_nodes)
+
+    # Start with no new valid reactant nodes
+    new_vrn = set([])
+
+    while True:
+
+        # Valid product nodes will be connected at the start of an expansion cycle
+        # They are however in principle identified in the previous cycle via valid reactant nodes
+        for r_node in new_vrn:
+            p_node = network.successors(r_node)[0]
+            network.node[p_node]['dist'] = n
+            node_type = network.node[p_node]['type']
+            if node_type == 'pf':
+                pf += 1
+            if node_type == 'pr':
+                pr += 1
+
+        # Expand the valid compound set
+        # When n = 0, this means the starting compounds
+        # When n > 0, the valid compound set will be expanded
+        new_vcn = ExpandValidCompoundSet(network, proc_num, new_vrn, valid_compound_nodes) - valid_compound_nodes
+        valid_compound_nodes = new_vcn.union(valid_compound_nodes)
+
+        new_vrn = FindValidReactantNodes(network, proc_num, valid_compound_nodes) - valid_reactant_nodes
+        valid_reactant_nodes = new_vrn.union(valid_reactant_nodes)
+
+        for node in new_vcn:
+            network.node[node]['dist'] = n
+            c += 1
+        for node in new_vrn:
+            network.node[node]['dist'] = n
+            node_type = network.node[node]['type']
+            if node_type == 'rf':
+                rf += 1
+            if node_type == 'rr':
+                rr += 1
+
+        # Nicely (hopefully) formatted progress output
+        output = '{0:<%s} {1:>%s} {2:>%s} {3:>%s} {4:>%s} {5:>%s}' % (str(l+6), str(l+5), str(l+5), str(l+5), str(l+5), str(l+5))
+        print(output.format('Step ' + str(n) + ':', str(c) + ' c', str(rf) + ' rf', str(pf) + ' pf', str(rr) + ' rr', str(pr) + ' pr'))
+
+        n += 1
+
+        if set(prev_vrn) == valid_reactant_nodes and set(prev_vcn) == valid_compound_nodes:
+            # When no new valid compound or reactant nodes have been identified, it is time to stop
+            break
+        else:
+            if n > N and N !=-1:
+                # n starts at 0 and increments by one before each round dealing
+                # with that particular step n - stop when n exceeds the limit
+                break
+        prev_vrn = list(valid_reactant_nodes)
+        prev_vcn = list(valid_compound_nodes)
+
+    total_time = time.time() - time_start
+
+    sWrite("\nDone in %ss.\n" %str(total_time))
+
+    return (valid_compound_nodes, valid_reactant_nodes)
+
+def test_DistanceToOrigin():
+    G = nx.DiGraph()
+    G.add_node(1,type='c',start=False)
+    G.add_node(2,type='rf',c={1})
+    G.add_node(3,type='pf',c={4})
+    G.add_node(4,type='c',start=False)
+    G.add_path([1,2,3,4])
+    G.add_node(9,type='rr',c={4})
+    G.add_node(10,type='pr',c={1})
+    G.add_path([4,9,10,1])
+    G.add_node(5,type='c',start=False)
+    G.add_node(6,type='rf',c={1,5})
+    G.add_node(7,type='pf',c={8})
+    G.add_node(8,type='c',start=True) # Compound 8 is now the start
+    G.add_path([1,6,7,8])
+    G.add_edge(5,6)
+    G.add_node(11,type='rr',c={8})
+    G.add_node(12,type='pr',c={1,5})
+    G.add_path([8,11,12,1])
+    G.add_edge(12,5)
+
+    output_0 = DistanceToOrigin(G.copy(), 4, 0) # Creating a copy, since the function modifies the network it is given
+    output_1 = DistanceToOrigin(G.copy(), 4, 1)
+    output_2 = DistanceToOrigin(G, 4, 2) # Not creating a copy in order to check modification capabilities
+
+    assert output_0 == (set([8]), set([11])) # Compound and reactant nodes reachable within 0 reaction steps, respectively
+    assert output_1 == (set([8,1,5]), set([11,6,2]))
+    assert output_2 == (set([8,1,5,4]), set([11,6,2,9]))
+
+    assert set([G.node[n]['dist'] for n in [8,11]]) == set([0])
+    assert set([G.node[n]['dist'] for n in [1,2,5,6,12]]) == set([1])
+    assert set([G.node[n]['dist'] for n in [3,4,7,9]]) == set([2])
+
+    # Test for detection of non-reachable nodes
+    # Only nodes 1, 2, 3, 4, 5 and 6 should be reachable and will receive a 'dist' value - other nodes do not
+    Y = nx.DiGraph()
+    Y.add_node(1,type='c',start=True)
+    Y.add_node(2,type='rf',c={1})
+    Y.add_node(3,type='pf',c={6})
+    Y.add_node(6,type='c',start=False)
+    Y.add_path([1,2,3,6])
+    Y.add_node(4,type='rr',c={6})
+    Y.add_node(5,type='pr',c={1})
+    Y.add_path([6,4,5,1])
+
+    Y.add_node(7,type='c',start=False)
+    Y.add_node(8,type='rf',c={6,7})
+    Y.add_node(9,type='pf',c={12})
+    Y.add_node(12,type='c',start=False)
+    Y.add_path([7,8,9,12])
+    Y.add_edge(6,8)
+    Y.add_node(10,type='rr',c={12})
+    Y.add_node(11,type='pr',c={6,7})
+    Y.add_path([6,8,9,12])
+    Y.add_edge(12,10)
+
+    output_Y = DistanceToOrigin(Y, 4, -1)
+
+    z = 0
+    for node in Y.nodes():
+        try:
+            x = Y.node[node]['dist']
+        except KeyError:
+            z += 1
+
+    assert z == 6
+    assert [Y.node[n]['dist'] for n in range(1,7)] == [0,0,1,1,2,1]
+
+
+def PruneNetwork(network, remove_cfm=True):
+    """
+    Remove all nodes that are 'unreachable' defined as lacking a 'dist' data key.
+
+    Also removes CFM spectra from the mine_data dictionary by default.
+    """
+    for node in network.nodes():
+        try:
+            x = network.node[node]['dist']
+        except KeyError:
+            network.remove_node(node)
+    if remove_cfm:
+        for mid in network.graph['mine_data'].keys():
+            if 'Neg_CFM_spectra' in network.graph['mine_data'][mid].keys():
+                del network.graph['mine_data'][mid]['Neg_CFM_spectra']
+            if 'Pos_CFM_spectra' in network.graph['mine_data'][mid].keys():
+                del network.graph['mine_data'][mid]['Pos_CFM_spectra']
+    network.graph['pruned'] = True
+
+def test_PruneNetwork():
+    # Nodes that were not reached in DistanceToOrigin are going to lack the 'dist' data key
+    # Such nodes are expected to be removed
+    G = nx.DiGraph()
+    G.add_node(1,type='c',start=False)
+    G.add_node(2,type='rf',c={1})
+    G.add_node(3,type='pf',c={4})
+    G.add_node(4,type='c',start=False)
+    G.add_path([1,2,3,4])
+    G.add_node(9,type='rr',c={4})
+    G.add_node(10,type='pr',c={1})
+    G.add_path([4,9,10,1])
+    G.add_node(5,type='c',start=False)
+    G.add_node(6,type='rf',c={1,5})
+    G.add_node(7,type='pf',c={8})
+    G.add_node(8,type='c',start=True) # Compound 8 is now the start
+    G.add_path([1,6,7,8])
+    G.add_edge(5,6)
+    G.add_node(11,type='rr',c={8})
+    G.add_node(12,type='pr',c={1,5})
+    G.add_path([8,11,12,1])
+    G.add_edge(12,5)
+
+    G.graph['mine_data'] = {
+    'C1':{'_id':'C1','Neg_CFM_spectra':{'Dummy'},'Pos_CFM_spectra':{'Dummy'}},
+    'C4':{'_id':'C4','Neg_CFM_spectra':{'Dummy'},'Pos_CFM_spectra':{'Dummy'}},
+    'C5':{'_id':'C5','Neg_CFM_spectra':{'Dummy'},'Pos_CFM_spectra':{'Dummy'}},
+    'C8':{'_id':'C1','Neg_CFM_spectra':{'Dummy'},'Pos_CFM_spectra':{'Dummy'}}
+    }
+
+    H = G.copy()
+
+    output = DistanceToOrigin(G, 4, 1)
+    output = DistanceToOrigin(H, 4, 2)
+
+    Y = G.subgraph([1,2,5,6,8,11,12])
+    Z = H.subgraph([1,2,3,4,5,6,7,8,9,11,12])
+
+    PruneNetwork(G)
+    PruneNetwork(H)
+
+    assert nx.is_isomorphic(G,Y)
+    assert G.nodes(data=True) == Y.nodes(data=True)
+    assert set(G.edges()) == set(Y.edges())
+
+    assert nx.is_isomorphic(H,Z)
+    assert H.nodes(data=True) == Z.nodes(data=True)
+    assert set(H.edges()) == set(Z.edges())
+
+    assert G.graph['mine_data'] == H.graph['mine_data'] == {
+    'C1':{'_id':'C1'},
+    'C4':{'_id':'C4'},
+    'C5':{'_id':'C5'},
+    'C8':{'_id':'C1'}
+    }
+
+
+def PrepareDictionaries(network):
+    """Prepares dictionaries for direct translation of KEGG IDs and Names to MINE IDs."""
+    network.graph['kegg2mid'] = {}
+    network.graph['name2mid'] = {}
+    for mid in network.graph['mine_data'].keys():
+        try:
+            kegg_ids = network.graph['mine_data'][mid]['DB_links']['KEGG']
+        except KeyError:
+            kegg_ids = []
+        try:
+            names = network.graph['mine_data'][mid]['Names']
+        except KeyError:
+            names = []
+        for kegg_id in kegg_ids:
+            network.graph['kegg2mid'][kegg_id] = mid
+        for name in names:
+            network.graph['name2mid'][name] = mid
+
+def test_PrepareDictionaries():
+    G = nx.DiGraph()
+    G.graph['mine_data'] = {}
+    G.graph['mine_data']['C1'] = {'_id':'C1','Names':['Something','Anything'], 'DB_links':{'KEGG':['C93102']}}
+    G.graph['mine_data']['C2'] = {'_id':'C2','Names':['Whatever'], 'DB_links':{'KEGG':['C33391','C33392']}}
+    G.graph['mine_data']['C3'] = {'_id':'C3','Names':['Bit','Bob']}
+    G.graph['mine_data']['C4'] = {'_id':'C4'}
+    G.graph['mine_data']['R1'] = {'_id':'R1'}
+
+    expected_kegg2mid = {'C93102':'C1','C33391':'C2','C33392':'C2'}
+    expected_name2mid = {'Something':'C1','Anything':'C1','Whatever':'C2','Bit':'C3','Bob':'C3'}
+
+    PrepareDictionaries(G)
+
+    assert G.graph['kegg2mid'] == expected_kegg2mid
+    assert G.graph['name2mid'] == expected_name2mid
+
+
 # Main code block
-def main(infile_name, step_limit, comp_limit, C_limit, outfile_name):
-    # Get starting compound MINE IDs
+def main(infile_name, mine, kegg, step_limit, comp_limit, C_limit, outfile_name):
+
+    # Exit if a database choice has not been specified
+    if not mine and not kegg:
+        sys.exit("Please choose one or more databases for network construction (--mine,--kegg).\n")
+
+    # Get starting compounds
     start_kegg_ids = ReadCompounds(infile_name)
-    start_ids = list(set(KeggToMineId(start_kegg_ids).values()))
+
+    # Acquire raw KEGG dictionaries
+    kegg_comp_dict = {} # Default
+    kegg_rxn_dict = {} # Default
+    if kegg:
+        raw_kegg = GetRawKegg()
+        kegg_comp_dict = raw_kegg[0]
+        kegg_rxn_dict = raw_kegg[1]
+
+    # Acquire raw MINE dictionaries
+    start_ids = [] # Default
+    mine_comp_dict = {} # Default
+    mine_rxn_dict = {} # Default
+    if mine:
+        start_ids = list(set(KeggToMineId(start_kegg_ids).values()))
+        raw_mine = GetRawNetwork(start_ids, step_limit, comp_limit, C_limit)
+        mine_comp_dict = raw_mine[0]
+        mine_rxn_dict = raw_mine[1]
+
+    # Combine KEGG and MINE dictionaries
+    mine_comp_dict.update(kegg_comp_dict)
+    mine_rxn_dict.update(kegg_rxn_dict)
+
     # Create the network
-    minetwork = ConstructNetwork(*GetRawNetwork(start_ids, step_limit, comp_limit, C_limit), start_ids, extra_kegg_ids=start_kegg_ids)
+    network = ConstructNetwork(mine_comp_dict, mine_rxn_dict, start_ids, extra_kegg_ids=start_kegg_ids)
+
+    # Integrate KEGG with MINE
+    if mine and kegg:
+        KeggMineIntegration(network)
+
+    # Prune the network
+    sWrite("\nPruning network...\n")
+    dummy = DistanceToOrigin(network, n_procs, -1)
+    PruneNetwork(network)
+    sWrite("\nDone.\n")
+    network_pruned = True
+
+    # Prepare dictionaries
+    sWrite("\nPreparing compound dictionaries...")
+    PrepareDictionaries(network)
+    sWrite(" Done.\n")
+
     # Save to Pickle
-    pickle.dump(minetwork, open(outfile_name, 'wb'))
+    pickle.dump(network, open(outfile_name, 'wb'))
 
 
 if __name__ == "__main__":
     # Read arguments from the commandline
     parser = argparse.ArgumentParser()
     parser.add_argument('infile', help='Read KEGG compound identifiers from text file.')
-    parser.add_argument('outfile', help='Write MINE network to Python Pickle file.')
-    parser.add_argument('-r', type=int, default=10, help='Maximum number of reaction steps to download.')
-    parser.add_argument('-c', type=int, default=100000, help='Maximum number of compounds to download.')
-    parser.add_argument('-C', type=int, default=25, help='Maximum number of C atoms per molecule for following a reaction.')
+    parser.add_argument('outfile', help='Write network to Python Pickle file.')
+    parser.add_argument('mine', '-M', action='store_true', help='Use MINE for network construction.')
+    parser.add_argument('kegg', '-K', action='store_true', help='Use KEGG for network construction.')
+    parser.add_argument('-r', type=int, default=10, help='Maximum number of MINE reaction steps to download.')
+    parser.add_argument('-c', type=int, default=400000, help='Maximum number of MINE compounds to download.')
+    parser.add_argument('-C', type=int, default=25, help='Maximum number of C atoms per molecule.')
     args = parser.parse_args()
-    main(args.infile, args.r, args.c, args.C, args.outfile)
+    main(args.infile, args.mine, args.kegg, args.r, args.c, args.C, args.outfile)
