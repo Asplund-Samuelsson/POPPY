@@ -237,12 +237,13 @@ def GetKeggMolSmiles(kegg_id, krest="http://rest.kegg.jp"):
     while True:
         r = rget(krest)
         if r.status_code == 200:
-            mol = Chem.MolFromMolBlock(r.text)
-            if mol == None:
-                sError("\nWarning: KEGG ID '%s' does not yield a correct molecule object. SMILES not produced.\n" % str(kegg_id))
+            try:
+                mol = Chem.MolFromMolBlock(r.text)
+                smiles = Chem.MolToSmiles(mol)
+                return smiles
+            except:
+                sError("\nWarning: SMILES could not be produced for KEGG ID '%s'.\n" % str(kegg_id))
                 return None
-            else:
-                return Chem.MolToSmiles(mol)
         else:
             # Server not returning a result, try again
             n += 1
@@ -270,6 +271,11 @@ def test_GetKeggMolSmiles(capsys):
 def FormatKeggCompound(kegg_text):
     """Formats a compound KEGG rest text record in the MINE database format."""
     kegg_dict = KeggRestDict(kegg_text)
+
+    # Ensure that the kegg_dict is a dictionary
+    if not type(kegg_dict) == dict:
+        sError("\nWarning: KEGG text record did not yield a dictionary: '%s'" % str(kegg_text))
+        return None
 
     compound = {}
 
@@ -517,9 +523,14 @@ def GetKeggComps(comp_id_list, num_workers=128):
         while True:
             comp_id = work.get()
             if comp_id is None:
+                work.task_done()
                 break
             sWrite("\rHandling compound query '%s'." % str(comp_id))
-            output.put(FormatKeggCompound(GetKeggText(comp_id)))
+            kegg_text = GetKeggText(comp_id)
+            if not kegg_text is None:
+                kegg_comp = FormatKeggCompound(kegg_text)
+                if not kegg_comp is None:
+                    output.put(kegg_comp)
             work.task_done()
 
     work = queue.Queue()
@@ -547,6 +558,7 @@ def GetKeggComps(comp_id_list, num_workers=128):
     # Get the results
     comps = []
 
+
     while not output.empty():
         comps.append(output.get())
 
@@ -561,6 +573,7 @@ def test_GetKeggComps():
         assert comp in comps_2
     for comp in comps_2:
         assert comp in comps_1
+    assert GetKeggComps(["C99999"]) == []
 
 
 def GetKeggRxns(rxn_id_list, num_workers=128):
@@ -572,9 +585,14 @@ def GetKeggRxns(rxn_id_list, num_workers=128):
         while True:
             rxn_id = work.get()
             if rxn_id is None:
+                work.task_done()
                 break
             sWrite("\rHandling reaction query '%s'." % str(rxn_id))
-            output.put(FormatKeggReaction(GetKeggText(rxn_id)))
+            kegg_text = GetKeggText(rxn_id)
+            if not kegg_text is None:
+                kegg_rxn = FormatKeggReaction(kegg_text)
+                if not kegg_rxn is None:
+                    output.put(kegg_rxn)
             work.task_done()
 
     work = queue.Queue()
@@ -616,9 +634,9 @@ def test_GetKeggRxns():
         assert rxn in rxns_2
     for rxn in rxns_2:
         assert rxn in rxns_1
+    assert GetKeggRxns(["R99999"]) == []
 
-
-def GetRawKegg(kegg_comp_ids=[], kegg_rxn_ids=[], krest="http://rest.kegg.jp", n_threads=128, test_limit=0):
+def GetRawKEGG(kegg_comp_ids=[], kegg_rxn_ids=[], krest="http://rest.kegg.jp", n_threads=128, test_limit=0):
     """
     Downloads all KEGG compound (C) and reaction (R) records and formats them
     as MINE database compound or reaction entries. The final output is a tuple
@@ -696,7 +714,7 @@ def GetRawKegg(kegg_comp_ids=[], kegg_rxn_ids=[], krest="http://rest.kegg.jp", n
     sWrite("KEGG download completed.\n")
     return (kegg_comp_dict, kegg_rxn_dict)
 
-def test_GetRawKegg_1():
+def test_GetRawKEGG_1():
     # Butanol (C06142)
     kegg_comp_ids = ["C01412","C00005","C00080","C06142","C00006","C00004","C00003"]
     kegg_rxn_ids = ["R03545","R03544"]
@@ -706,9 +724,9 @@ def test_GetRawKegg_1():
     kegg_comp_dict['C06142']['Product_of'] = ['R03544','R03545']
     kegg_comp_dict['C01412']['Reactant_in'] = ['R03544','R03545']
 
-    assert GetRawKegg(kegg_comp_ids, kegg_rxn_ids) == (kegg_comp_dict, kegg_rxn_dict)
+    assert GetRawKEGG(kegg_comp_ids, kegg_rxn_ids) == (kegg_comp_dict, kegg_rxn_dict)
 
-def test_GetRawKegg_2():
+def test_GetRawKEGG_2():
     # Random sample
     random_comp_ids = [
     "C14978","C01268","C09868","C05562","C08104",
@@ -729,9 +747,9 @@ def test_GetRawKegg_2():
     random_rxn_dict = dict(zip(random_rxn_ids, [FormatKeggReaction(GetKeggText(x)) for x in random_rxn_ids]))
     SortKeggReactions(random_comp_dict, random_rxn_dict)
 
-    assert GetRawKegg(random_comp_ids, random_rxn_ids) == (random_comp_dict, random_rxn_dict)
+    assert GetRawKEGG(random_comp_ids, random_rxn_ids) == (random_comp_dict, random_rxn_dict)
 
-def test_GetRawKegg_3():
+def test_GetRawKEGG_3():
     # First 20 compounds and reactions
     first_comp_ids = [x.split("\t")[0].split(":")[1] for x in rget("http://rest.kegg.jp/list/compound").text.split("\n")[0:20]]
     first_rxn_ids = [x.split("\t")[0].split(":")[1] for x in rget("http://rest.kegg.jp/list/reaction").text.split("\n")[0:20]]
@@ -740,7 +758,7 @@ def test_GetRawKegg_3():
     first_rxn_dict = dict(zip(first_rxn_ids, [FormatKeggReaction(GetKeggText(x)) for x in first_rxn_ids]))
     SortKeggReactions(first_comp_dict, first_rxn_dict)
 
-    assert GetRawKegg(test_limit=20) == (first_comp_dict, first_rxn_dict)
+    assert GetRawKEGG(test_limit=20) == (first_comp_dict, first_rxn_dict)
 
 
 def QuickSearch(con, db, query):
@@ -783,6 +801,7 @@ def ThreadedQuickSearch(con, db, query_list):
         while True:
             query = work.get()
             if query is None:
+                work.task_done()
                 break
             sWrite("\rHandling quick query '%s'." % str(query))
             output.put(QuickSearch(con, db, query))
@@ -876,6 +895,7 @@ def ThreadedGetComps(con, db, comp_id_list):
         while True:
             comp_id = work.get()
             if comp_id is None:
+                work.task_done()
                 break
             sWrite("\rHandling compound query '%s'." % str(comp_id))
             output.put(GetComp(con, db, comp_id))
@@ -993,6 +1013,7 @@ def ThreadedGetRxns(con, db, rxn_id_list):
         while True:
             rxn_id = work.get()
             if rxn_id is None:
+                work.task_done()
                 break
             sWrite("\rHandling reaction query '%s'." % str(rxn_id))
             output.put(GetRxn(con, db, rxn_id))
@@ -1061,13 +1082,13 @@ def test_ThreadedGetRxns():
 
 def ReadCompounds(filename):
     """Read a file with KEGG compound IDs."""
-    sWrite("\nReading compound ID file...\n")
+    sWrite("\nReading compound ID file...")
     compounds = [line.rstrip() for line in open(filename, 'r')]
     for c in compounds:
         if re.fullmatch("^C[0-9]{5}$", c) == None:
-            msg = "Warning: The supplied string '", c, "' is not a valid KEGG compound ID."
+            msg = "\nWarning: The supplied string '", c, "' is not a valid KEGG compound ID."
             sys.exit(msg)
-    print("Done.")
+    sWrite(" Done.")
     return compounds
 
 def test_ReadCompounds():
@@ -1255,15 +1276,15 @@ def test_ExtractCompReactionIds():
     assert ExtractCompReactionIds(C4) == []
 
 
-def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
+def GetRawMINE(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
     """Download connected reactions and compounds up to the limits."""
-
-    sWrite("\nDownloading raw network data...\n\n")
 
     # Set up connection
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
+
+    sWrite("\nDownloading MINE data via %s/...\n\n" % server_url)
 
     # Set up output dictionaries
     comp_dict = {}
@@ -1392,7 +1413,7 @@ def GetRawNetwork(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
     print("\nDone.")
     return (comp_dict, rxn_dict)
 
-def test_GetRawNetwork():
+def test_GetRawMINE():
 
     server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     db = "KEGGexp2"
@@ -1427,26 +1448,26 @@ def test_GetRawNetwork():
 
     compound_ids = ['Cefbaa83ea06e7c31820f93c1a5535e1378aba42b','C38a97a9f962a32b984b1702e07a25413299569ab']
 
-    assert GetRawNetwork(compound_ids, step_limit=2, C_limit=500) == (comp_dict, rxn_dict)
+    assert GetRawMINE(compound_ids, step_limit=2, C_limit=500) == (comp_dict, rxn_dict)
 
     # NAD+ should not be connected via reactions
     nad_plus = 'Xf5dc8599a48d0111a3a5f618296752e1b53c8d30'
     nad_comp = con.get_comps(db, [nad_plus])[0]
 
-    assert GetRawNetwork([nad_plus], C_limit=500) == ({nad_plus : nad_comp}, {})
+    assert GetRawMINE([nad_plus], C_limit=500) == ({nad_plus : nad_comp}, {})
 
     # Huge compounds are not allowed to grow
     huge = 'Caf6fc55862387e5fd7cd9635ef9981da7f08a531'
     huge_comp = con.get_comps(db, [huge])[0]
 
-    assert GetRawNetwork([huge]) == ({}, {})
+    assert GetRawMINE([huge]) == ({}, {})
 
     # Using octanol to test the carbon limit
     octanol = 'Cf6baa9f91035ac294770d5e0bfbe039e5ab67261'
     C24_comp = 'C479f661686a597fa18f69c533438aa7bf0e1fd89' # This is connected by 1 step
 
-    net_C25 = GetRawNetwork([octanol], 1)
-    net_C20 = GetRawNetwork([octanol], 1, C_limit=20)
+    net_C25 = GetRawMINE([octanol], 1)
+    net_C20 = GetRawMINE([octanol], 1, C_limit=20)
 
     try:
         x = net_C25[0][C24_comp]['_id']
@@ -1814,7 +1835,7 @@ def test_ExpandStartCompIds():
 def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[]):
     """
     Constructs a directed graph (network) from the compound and reaction
-    dictionaries produced by GetRawNetwork and/or GetRawKegg.
+    dictionaries produced by GetRawMINE and/or GetRawKEGG.
     """
 
     sWrite("\nConstructing network...\n")
@@ -2590,38 +2611,79 @@ def test_PruneNetwork():
 
 def PrepareDictionaries(network):
     """Prepares dictionaries for direct translation of KEGG IDs and Names to MINE IDs."""
-    network.graph['kegg2mid'] = {}
-    network.graph['name2mid'] = {}
-    for mid in network.graph['mine_data'].keys():
+    network.graph['kegg2nodes'] = {}
+    network.graph['name2nodes'] = {}
+    for node in network.nodes():
+        # Only consider nodes that are reachable, i.e. have predecessor(s)
+        if not network.predecessors(node):
+            continue
+        # Get associated KEGG IDs
         try:
-            kegg_ids = network.graph['mine_data'][mid]['DB_links']['KEGG']
+            kegg_ids = network.graph['mine_data'][network.node[node]['mid']]['DB_links']['KEGG']
         except KeyError:
             kegg_ids = []
+        # Get associated names
         try:
-            names = network.graph['mine_data'][mid]['Names']
+            names = network.graph['mine_data'][network.node[node]['mid']]['Names']
         except KeyError:
             names = []
+        # Add node to set of nodes for each KEGG ID
         for kegg_id in kegg_ids:
-            network.graph['kegg2mid'][kegg_id] = mid
+            try:
+                network.graph['kegg2nodes'][kegg_id].add(node)
+            except KeyError:
+                network.graph['kegg2nodes'][kegg_id] = set([node])
+        # Add node to set of nodes for each name
         for name in names:
-            network.graph['name2mid'][name] = mid
+            try:
+                network.graph['name2nodes'][name].add(node)
+            except KeyError:
+                network.graph['name2nodes'][name] = set([node])
 
 def test_PrepareDictionaries():
     G = nx.DiGraph()
-    G.graph['mine_data'] = {}
-    G.graph['mine_data']['C1'] = {'_id':'C1','Names':['Something','Anything'], 'DB_links':{'KEGG':['C93102']}}
-    G.graph['mine_data']['C2'] = {'_id':'C2','Names':['Whatever'], 'DB_links':{'KEGG':['C33391','C33392']}}
-    G.graph['mine_data']['C3'] = {'_id':'C3','Names':['Bit','Bob']}
-    G.graph['mine_data']['C4'] = {'_id':'C4'}
-    G.graph['mine_data']['R1'] = {'_id':'R1'}
+    G.graph['mine_data'] = {
+        'C1' : {'_id':'C1','Names':['Something','Anything'], 'DB_links':{'KEGG':['C93102']}},
+        'X1' : {'_id':'X1','Names':['Something','Anything'], 'DB_links':{'KEGG':['C93102']}},
+        'C2' : {'_id':'C2','Names':['Whatever'], 'DB_links':{'KEGG':['C33391','C33392']}},
+        'C3' : {'_id':'C3','Names':['Bit','Bob']},
+        'C4' : {'_id':'C4'},
+        'X5' : {'_id':'X5','Names':['Whatever']},
+        'C7' : {'_id':'C7','DB_links':{'KEGG':['C00001']}},
+        'C8' : {'_id':'C8','Names':['Twin'],'DB_links':{'KEGG':['C11011']}},
+        'C9' : {'_id':'C9','Names':['Twin'],'DB_links':{'KEGG':['C11011']}},
+        'R1' : {'_id':'R1'}, 'R2' : {'_id':'R2'}, 'R3' : {'_id':'R3'},
+        'R4' : {'_id':'R4'}, 'R8' : {'_id':'R8'}, 'R9' : {'_id':'R9'}
+    }
 
-    expected_kegg2mid = {'C93102':'C1','C33391':'C2','C33392':'C2'}
-    expected_name2mid = {'Something':'C1','Anything':'C1','Whatever':'C2','Bit':'C3','Bob':'C3'}
+    # Add nodes
+    nodes = [
+        (1,{'mid':'C1'}), (2,{'mid':'X1'}), (3,{'mid':'C2'}),
+        (4,{'mid':'C3'}), (5,{'mid':'C4'}), (6,{'mid':'X5'}),
+        (7,{'mid':'C7'}), (8,{'mid':'C8'}), (9,{'mid':'C9'}),
+        (11,{'mid':'R1'}), (12,{'mid':'R2'}), (13,{'mid':'R3'}),
+        (14,{'mid':'R4'}), (17,{'mid':'R7'}), (18,{'mid':'R8'}),
+        (19,{'mid':'R9'})
+    ]
+    G.add_nodes_from(nodes)
+
+    # Connect nodes to simulate connectedness
+    # Note that (7,17) means 7 is only connected outwards and cannot be reached
+    G.add_edges_from([(11,1),(12,3),(13,4),(14,5),(7,17),(18,8),(19,9)])
+
+    expected_kegg2nodes = {
+        'C93102':set([1]), 'C33391':set([3]), 'C33392':set([3]), 'C11011':set([8,9])
+    }
+
+    expected_name2nodes = {
+        'Something':set([1]), 'Anything':set([1]), 'Whatever':set([3]),
+        'Bit':set([4]), 'Bob':set([4]), 'Twin':set([8,9])
+    }
 
     PrepareDictionaries(G)
 
-    assert G.graph['kegg2mid'] == expected_kegg2mid
-    assert G.graph['name2mid'] == expected_name2mid
+    assert G.graph['kegg2nodes'] == expected_kegg2nodes
+    assert G.graph['name2nodes'] == expected_name2nodes
 
 
 # Main code block
@@ -2629,7 +2691,7 @@ def main(infile_name, mine, kegg, step_limit, comp_limit, C_limit, outfile_name)
 
     # Exit if a database choice has not been specified
     if not mine and not kegg:
-        sys.exit("Please choose one or more databases for network construction (--mine,--kegg).\n")
+        sys.exit("\nPlease choose one or more databases for network construction:\n-M, --mine for MINE\n-K, --kegg for KEGG\n")
 
     # Get starting compounds
     start_kegg_ids = ReadCompounds(infile_name)
@@ -2638,7 +2700,7 @@ def main(infile_name, mine, kegg, step_limit, comp_limit, C_limit, outfile_name)
     kegg_comp_dict = {} # Default
     kegg_rxn_dict = {} # Default
     if kegg:
-        raw_kegg = GetRawKegg()
+        raw_kegg = GetRawKEGG()
         kegg_comp_dict = raw_kegg[0]
         kegg_rxn_dict = raw_kegg[1]
 
@@ -2648,7 +2710,7 @@ def main(infile_name, mine, kegg, step_limit, comp_limit, C_limit, outfile_name)
     mine_rxn_dict = {} # Default
     if mine:
         start_ids = list(set(KeggToMineId(start_kegg_ids).values()))
-        raw_mine = GetRawNetwork(start_ids, step_limit, comp_limit, C_limit)
+        raw_mine = GetRawMINE(start_ids, step_limit, comp_limit, C_limit)
         mine_comp_dict = raw_mine[0]
         mine_rxn_dict = raw_mine[1]
 
@@ -2665,7 +2727,7 @@ def main(infile_name, mine, kegg, step_limit, comp_limit, C_limit, outfile_name)
 
     # Prune the network
     sWrite("\nPruning network...\n")
-    dummy = DistanceToOrigin(network, n_procs, -1)
+    dummy = DistanceToOrigin(network, 2, -1)
     PruneNetwork(network)
     sWrite("\nDone.\n")
     network_pruned = True
@@ -2684,10 +2746,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('infile', help='Read KEGG compound identifiers from text file.')
     parser.add_argument('outfile', help='Write network to Python Pickle file.')
-    parser.add_argument('mine', '-M', action='store_true', help='Use MINE for network construction.')
-    parser.add_argument('kegg', '-K', action='store_true', help='Use KEGG for network construction.')
+    parser.add_argument('-M', '--mine', action='store_true', help='Use MINE for network construction.')
+    parser.add_argument('-K', '--kegg', action='store_true', help='Use KEGG for network construction.')
     parser.add_argument('-r', type=int, default=10, help='Maximum number of MINE reaction steps to download.')
     parser.add_argument('-c', type=int, default=400000, help='Maximum number of MINE compounds to download.')
-    parser.add_argument('-C', type=int, default=25, help='Maximum number of C atoms per molecule.')
+    parser.add_argument('-C', type=int, default=25, help='Maximum number of C atoms per MINE molecule.')
     args = parser.parse_args()
     main(args.infile, args.mine, args.kegg, args.r, args.c, args.C, args.outfile)

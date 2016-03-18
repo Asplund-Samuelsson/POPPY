@@ -900,35 +900,39 @@ def ParseCompound(compound, network):
         except KeyError:
             sError("Error: MINE ID '%s' appears to not be available in the network.\n" % compound)
     elif kegg_match:
-        if 'kegg2mid' in network.graph.keys():
-            try:
-                node = network.graph['cmid2node'][network.graph['kegg2mid'][compound]]
+        try:
+            nodes = network.graph['kegg2nodes'][compound]
+            if len(nodes) > 1:
+                nodes = "'\n'".join(sorted([network.node[n]['mid'] for n in nodes]))
+                sError("Error: '%s' refers to multiple nodes. Use --exact_comp_id and --compound followed by one of:\n'%s'\n" % (compound, nodes))
+            else:
+                node = list(nodes)[0]
                 if not node in network.nodes():
                     sError("Error: KEGG ID '%s' appears to not be available in the network.\n" % compound)
                     node = None
-            except KeyError:
-                sError("Error: KEGG ID '%s' appears to not be available in the network.\n" % compound)
-        else:
-            sError("Error: KEGG to node dictionary to use with KEGG ID '%s' not present. Use the --dicts option.\n" % compound)
+        except KeyError:
+            sError("Error: KEGG ID '%s' appears to not be available in the network.\n" % compound)
     else:
-        if 'name2mid' in network.graph.keys():
-            try:
-                node = network.graph['cmid2node'][network.graph['name2mid'][compound]]
+        try:
+            nodes = network.graph['name2nodes'][compound]
+            if len(nodes) > 1:
+                nodes = "'\n'".join(sorted([network.node[n]['mid'] for n in nodes]))
+                sError("Error: '%s' refers to multiple nodes. Use --exact_comp_id and --compound followed by one of:\n'%s'\n" % (compound, nodes))
+            else:
+                node = list(nodes)[0]
                 if not node in network.nodes():
                     sError("Error: Name '%s' appears to not be available in the network.\n" % compound)
                     node = None
-            except KeyError:
-                sError("Error: Name '%s' appears to not be available in the network.\n" % compound)
-        else:
-            sError("Error: Name to node dictionary to use with '%s' not present. Use the --dicts option.\n" % compound)
+        except KeyError:
+            sError("Error: Name '%s' appears to not be available in the network.\n" % compound)
 
     return node
 
 def test_ParseCompound(capsys):
     G = nx.DiGraph()
     G.graph['cmid2node'] = {}
-    G.graph['kegg2mid'] = {}
-    G.graph['name2mid'] = {}
+    G.graph['kegg2nodes'] = {}
+    G.graph['name2nodes'] = {}
 
     G.graph['cmid2node'] = {
     'Cf647c96ae2e66c3b6ab160faa1d8498be5112fe4':1,
@@ -939,26 +943,33 @@ def test_ParseCompound(capsys):
     'C0736b9ad03e466caa7698fbd3fccf06f6654fb53':6,
     'C0d3cb8256055b59b846cd5930d69c266bb13deb1':7,
     'C12c16f3e8910911f982fe6fcd541c35bca59119e':8,
-    'Ce4a58113b67f1e7edb22e28123f300f36b763903':9
+    'Ce4a58113b67f1e7edb22e28123f300f36b763903':9,
+    'C31890':10,
+    'C00291':11,
+    'C67559':12,
+    'C67560':13,
+    'C99999':14
     }
 
-    G.graph['kegg2mid'] = {
-    'C31890':'Cf647c96ae2e66c3b6ab160faa1d8498be5112fe4',
-    'C00291':'C6a6f4d5234ea2b14b42c391eb760d6311afa8388',
-    'C67559':'C31b986bd97ef9152d7534436e847379077d4553c',
-    'C67560':'C31b986bd97ef9152d7534436e847379077d4553c'
+    G.graph['kegg2nodes'] = {
+    'C31890':set([1]), 'C00291':set([2]), 'C67559':set([3]),
+    'C67560':set([3]), 'C99999':set([14])
     }
 
-    G.graph['name2mid'] = {
-    'Alpha':'C0d3cb8256055b59b846cd5930d69c266bb13deb1',
-    'Beta':'C12c16f3e8910911f982fe6fcd541c35bca59119e',
-    'Gamma':'Ce4a58113b67f1e7edb22e28123f300f36b763903',
-    'n-Alpha':'C0d3cb8256055b59b846cd5930d69c266bb13deb1',
-    'n-Beta':'C12c16f3e8910911f982fe6fcd541c35bca59119e',
-    'n-Gamma':'Ce4a58113b67f1e7edb22e28123f300f36b763903'
+    G.graph['name2nodes'] = {
+    'Alpha':set([7]),
+    'Beta':set([8]),
+    'Gamma':set([9]),
+    'n-Alpha':set([7]),
+    'n-Beta':set([8]),
+    'n-Gamma':set([9]),
+    'Twin':set([5,8])
     }
 
     G.add_nodes_from(G.graph['cmid2node'].values())
+    node2cmid = {v: k for k, v in G.graph['cmid2node'].items()}
+    for n in G.nodes():
+        G.node[n]['mid'] = node2cmid[n]
 
     # Test KEGG IDs
     assert ParseCompound('C31890',G) == 1
@@ -967,26 +978,23 @@ def test_ParseCompound(capsys):
     assert ParseCompound('C67560',G) == 3
 
     # Test MINE IDs
-    assert [ParseCompound(c,G) for c in [{v: k for k, v in G.graph['cmid2node'].items()}[n] for n in range(1,10)]] == list(range(1,10))
+    assert [ParseCompound(c,G) for c in [node2cmid[n] for n in range(1,10)]] == list(range(1,10))
 
     # Test Names
     assert ParseCompound('Alpha',G) == ParseCompound('n-Alpha',G) == 7
     assert ParseCompound('Beta',G) == ParseCompound('n-Beta',G) == 8
     assert ParseCompound('Gamma',G) == ParseCompound('n-Gamma',G) == 9
+    assert ParseCompound('Twin',G) == None
 
     # Test error output
     assert ParseCompound('Cffffffffffffffffffffffffffffffffffffffff', G) == None
     assert ParseCompound('C00001', G) == None
-    Y = nx.DiGraph()
-    assert ParseCompound('C00001', Y) == None
     assert ParseCompound('Delta', G) == None
-    assert ParseCompound('Delta', Y) == None
 
-    exp_err = "Error: MINE ID '%s' appears to not be available in the network.\n" % 'Cffffffffffffffffffffffffffffffffffffffff'
+    exp_err = "Error: '%s' refers to multiple nodes. Use --exact_comp_id and --compound followed by one of:\n'%s'\n'%s'\n" % ('Twin','C12c16f3e8910911f982fe6fcd541c35bca59119e','C5a2e2841cff1008380531689c8c45b6dbecd04b6')
+    exp_err = exp_err + "Error: MINE ID '%s' appears to not be available in the network.\n" % 'Cffffffffffffffffffffffffffffffffffffffff'
     exp_err = exp_err + "Error: KEGG ID '%s' appears to not be available in the network.\n" % 'C00001'
-    exp_err = exp_err + "Error: KEGG to node dictionary to use with KEGG ID '%s' not present. Use the --dicts option.\n" % 'C00001'
     exp_err = exp_err + "Error: Name '%s' appears to not be available in the network.\n" % 'Delta'
-    exp_err = exp_err + "Error: Name to node dictionary to use with '%s' not present. Use the --dicts option.\n" % 'Delta'
 
     out, err = capsys.readouterr()
 
@@ -994,7 +1002,7 @@ def test_ParseCompound(capsys):
 
 
 # Main code block
-def main(infile_name, compound, reaction_limit, n_procs, sub_network_out, outfile_name):
+def main(infile_name, compound, exact_comp_id, reaction_limit, n_procs, sub_network_out, outfile_name):
 
     # Default results are empty
     results = {}
@@ -1006,24 +1014,25 @@ def main(infile_name, compound, reaction_limit, n_procs, sub_network_out, outfil
 
     # Pathway enumeration
     if compound:
-        target_node = ParseCompound(compound, network)
+        if not exact_comp_id:
+            target_node = ParseCompound(compound, network)
+        else:
+            try:
+                target_node = network.graph['cmid2node'][compound]
+            except KeyError:
+                target_node = None
+
         if target_node == None:
             sys.exit("Error: Target node was not found. Check compound '%s'.\n" % compound)
         paths = GeneratePaths(network, target_node, reaction_limit, n_procs)
 
         # Save sub-network graphml
         if sub_network_out:
-            sWrite("\nWriting sub-network to graphml...")
             subnet = PathSubNetwork(network, paths, target_node)
+            sWrite("\nWriting sub-network to graphml...")
             subnet = FormatGraphml(network, subnet)
             nx.write_graphml(subnet, sub_network_out)
             sWrite(" Done.\n")
-
-    # Save network
-    if network_out:
-        sWrite("\nWriting network to pickle...")
-        pickle.dump(network, open(network_out, 'wb'))
-        sWrite(" Done.\n")
 
     # Save results
     if outfile_name:
@@ -1039,7 +1048,8 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--outfile', type=str, default=False, help='Save identified pathways in pickle.')
     parser.add_argument('-s', '--sub_network', type=str, default=False, help='Save sub-network as graphml (requires -c).')
     parser.add_argument('-c', '--compound', type=str, default=False, help='Target compound.')
+    parser.add_argument('-e', '--exact_comp_id', action='store_true', help='Look for exact compound ID.')
     parser.add_argument('-r', '--reactions', type=int, default=5, help='Maximum number of reactions.')
     parser.add_argument('-p', '--processes', type=int, default=1, help='Number of parallel processes to run.')
     args = parser.parse_args()
-    main(args.infile, args.compound, args.reactions, args.processes, args.sub_network, args.outfile)
+    main(args.infile, args.compound, args.exact_comp_id, args.reactions, args.processes, args.sub_network, args.outfile)
