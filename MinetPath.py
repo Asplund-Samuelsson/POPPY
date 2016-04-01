@@ -111,20 +111,6 @@ def GeneratePaths(network, target_node, reaction_limit, n_procs=1, quiet=False):
         else:
             n_procs = 1
 
-    # Prepare Work queue
-    Work = mp.Queue()
-
-    n_work = 0
-
-    for origin_node in FindValidReactantNodes(network):
-        Work.put(origin_node)
-        n_work += 1
-
-    # Add the signal that all work is done
-    for i in range(n_procs):
-        Work.put(None)
-        n_work += 1
-
     # Define the Worker
     def Worker():
         while True:
@@ -133,6 +119,8 @@ def GeneratePaths(network, target_node, reaction_limit, n_procs=1, quiet=False):
                 break
             paths = FindPaths(network, origin_node, target_node, reaction_limit)
             output.extend(paths)
+            with lock:
+                n_work_done.value += 1
 
     # Set up reporter thread
     def Reporter():
@@ -157,8 +145,24 @@ def GeneratePaths(network, target_node, reaction_limit, n_procs=1, quiet=False):
             time.sleep(1)
 
     with mp.Manager() as manager:
+        # Initialize Work queue in manager
+        Work = manager.Queue()
+
+        for origin_node in FindValidReactantNodes(network):
+            Work.put(origin_node)
+
+        # Place stop signals on queue
+        for i in range(n_procs):
+            Work.put(None)
+
+        n_work = Work.qsize()
+
         # Initialize output list in manager
         output = manager.list()
+
+        # Initialize number of tasks done counter
+        n_work_done = mp.Value('i', 0)
+        lock = mp.Lock()
 
         # Start reporter
         if not quiet:
@@ -169,13 +173,17 @@ def GeneratePaths(network, target_node, reaction_limit, n_procs=1, quiet=False):
         procs = []
         for i in range(n_procs):
             p = mp.Process(target=Worker)
-            p.daemon=True
             procs.append(p)
             p.start()
 
-        # Stop processes
+        # Wait until all work is done
+        while n_work_done.value != n_work - n_procs:
+            time.sleep(1)
+
+        # Terminate the processes
         for p in procs:
-            p.join()
+            if p.is_alive():
+                p.terminate()
 
         # Stop reporter
         if not quiet:
