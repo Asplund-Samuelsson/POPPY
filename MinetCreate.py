@@ -1199,7 +1199,7 @@ def test_ExtractReactionCompIds(capsys):
 
 def LimitCarbon(comp, C_limit=25):
     """Returns True if the compound exceeds the carbon atom limit, otherwise False."""
-    regex = re.compile('C{1}[0-9]*')
+    regex = re.compile('[A-Z]{1}[a-z]*[0-9]*')
     try:
         formula = comp['Formula']
     except KeyError:
@@ -1209,14 +1209,20 @@ def LimitCarbon(comp, C_limit=25):
             comp_id = 'UnknownCompound'
         sError("Warning: Compound '%s' lacks a formula and will pass the C limit." % (comp_id))
         return False
-    match = re.search(regex, formula)
-    if match:
-        try:
-            C_count = int(match.group(0).split('C')[1])
-        except ValueError:
-            C_count = 1
-    else:
-        C_count = 0
+    # Find all elements in the formula
+    match = re.findall(regex, formula)
+    C_count = 0
+    for element in match:
+        # Check if the element is carbon
+        if re.search('C{1}[^a-z]*$', element):
+            # Determine carbon count
+            try:
+                C_count = int(element.split('C')[1])
+            except ValueError:
+                C_count = 1
+            # Assume that the first C encountered is carbon
+            # Later C's might be part of e.g. ACP
+            break
     if C_count > C_limit:
         return True
     else:
@@ -1249,6 +1255,10 @@ def test_LimitCarbon():
 
     assert True not in test_2_def
     assert True in test_2_20
+
+    assert not LimitCarbon({'_id':'X1','Formula':'HCl'}, C_limit=0)
+    assert not LimitCarbon({'_id':'X2','Formula':'CsI'}, C_limit=0)
+    assert LimitCarbon({'_id':'X3','Formula':'CH2Cl2'}, C_limit=0)
 
 
 def ExtractCompReactionIds(comp):
@@ -1494,8 +1504,8 @@ def AddCompoundNode(graph, compound, start_comp_ids):
         start = True
     elif 'C' + mid[1:] in start_comp_ids:
         start = True
-    elif mid[0] == 'X' and not LimitCarbon(compound, 0):
-        # Make sure that inorganic X compounds are treated as starting compounds
+    elif not LimitCarbon(compound, 0):
+        # Make sure that inorganic compounds are treated as starting compounds
         start = True
     else:
         start = False
