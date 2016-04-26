@@ -3,15 +3,15 @@
 # Import modules
 import sys
 
-def sWrite(string):
+def s_out(string):
     sys.stdout.write(string)
     sys.stdout.flush()
 
 
-def sError(string):
+def s_err(string):
     sys.stderr.write(string)
     sys.stderr.flush()
 
 
-def Chunks(lst,n):
+def chunks(lst,n):
     return [ lst[i::n] for i in range(n) ]

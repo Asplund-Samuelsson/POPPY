@@ -7,7 +7,7 @@ import multiprocessing as mp
 # Import scripts
 from mepmap_helpers import *
 
-def FindStartCompNodes(network):
+def find_start_comp_nodes(network):
     """Returns a list starting compound nodes in a MINE network."""
     start_comp_nodes = []
     for node in network.nodes():
@@ -15,24 +15,25 @@ def FindStartCompNodes(network):
             start_comp_nodes.append(node)
     return set(start_comp_nodes)
 
-def test_FindStartCompNodes():
+def test_find_start_comp_nodes():
     G = nx.DiGraph()
     G.add_node(1,type='c',start=True)
     G.add_node(2,type='rf')
     G.add_node(3,type='pf')
     G.add_node(4,type='c',start=False)
     G.add_path([1,2,3,4])
-    assert FindStartCompNodes(G) == set([1])
+    assert find_start_comp_nodes(G) == set([1])
 
 
-def FindValidReactantNodes(network, proc_num=1, comp_node_set=set(), force_parallel=False):
-    """Find and return all reactant nodes that are valid given the supplied compound node set."""
+def find_valid_reactant_nodes(network, proc_num=1, comp_node_set=set(),
+    force_parallel=False):
+    """Find valid reactant nodes given the supplied compound node set."""
     # If the set is empty, use starting compounds as the compound node set
     if comp_node_set == set():
-        comp_node_set = FindStartCompNodes(network)
+        comp_node_set = find_start_comp_nodes(network)
 
-    # Define the Worker
-    def Worker(work):
+    # Define the worker
+    def worker(work):
         results = set()
         for node in work:
             if network.node[node]['type'] in {'rf','rr'}:
@@ -44,7 +45,7 @@ def FindValidReactantNodes(network, proc_num=1, comp_node_set=set(), force_paral
     # Only go parallel if there are 5k or more items
     if len(network.nodes()) < 5000 and not force_parallel:
         output = []
-        Worker(network.nodes())
+        worker(network.nodes())
         valid_reactant_nodes = set(output)
 
     else:
@@ -54,8 +55,8 @@ def FindValidReactantNodes(network, proc_num=1, comp_node_set=set(), force_paral
 
             # Initialize processes
             procs = []
-            for work in Chunks(network.nodes(), proc_num):
-                p = mp.Process(target=Worker, args=(work,))
+            for work in chunks(network.nodes(), proc_num):
+                p = mp.Process(target=worker, args=(work,))
                 procs.append(p)
                 p.start()
 
@@ -68,7 +69,7 @@ def FindValidReactantNodes(network, proc_num=1, comp_node_set=set(), force_paral
 
     return valid_reactant_nodes
 
-def test_FindValidReactantNodes():
+def test_find_valid_reactant_nodes():
     G = nx.DiGraph()
     G.add_node(1,type='c',start=True)
     G.add_node(2,type='rf',c={1})
@@ -88,16 +89,19 @@ def test_FindValidReactantNodes():
     G.add_node(12,type='pr',c={1,5})
     G.add_path([8,11,12,1])
     G.add_edge(12,5)
-    start_comps = FindStartCompNodes(G)
+    start_comps = find_start_comp_nodes(G)
 
-    assert FindValidReactantNodes(G, 4, start_comps) == set([2])
-    assert FindValidReactantNodes(G, 4, start_comps, force_parallel=True) == set([2])
+    assert find_valid_reactant_nodes(G, 4, start_comps) == set([2])
+    assert find_valid_reactant_nodes(G, 4, start_comps, \
+    force_parallel=True) == set([2])
 
-    assert FindValidReactantNodes(G, 4) == set([2])
-    assert FindValidReactantNodes(G, 4, force_parallel=True) == set([2])
+    assert find_valid_reactant_nodes(G, 4) == set([2])
+    assert find_valid_reactant_nodes(G, 4, force_parallel=True) == set([2])
 
-    assert FindValidReactantNodes(G, 4, set([1,5])) == set([2,6])
-    assert FindValidReactantNodes(G, 4, set([1,5]), force_parallel=True) == set([2,6])
+    assert find_valid_reactant_nodes(G, 4, set([1,5])) == set([2,6])
+    assert find_valid_reactant_nodes(G, 4, set([1,5]), \
+    force_parallel=True) == set([2,6])
 
-    assert FindValidReactantNodes(G, 4, set([8])) == set([11])
-    assert FindValidReactantNodes(G, 4, set([8]), force_parallel=True) == set([11])
+    assert find_valid_reactant_nodes(G, 4, set([8])) == set([11])
+    assert find_valid_reactant_nodes(G, 4, set([8]), \
+    force_parallel=True) == set([11])

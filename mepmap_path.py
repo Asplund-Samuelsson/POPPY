@@ -17,7 +17,7 @@ from mepmap_origin_helpers import *
 from mepmap_helpers import *
 
 # Define functions
-def CountRxns(network):
+def count_reactions(network):
     """Count the number of unique reactions in a network."""
     rxns = set()
     for node in network.nodes(data=True):
@@ -25,17 +25,21 @@ def CountRxns(network):
             rxns.add(node[1]['mid'])
     return len(rxns)
 
-def test_CountRxns():
+def test_count_reactions():
     p1 = nx.DiGraph()
     p1.add_path(range(1,5))
-    for node_data in enumerate([('c','C1'), ('rf','R1'), ('pf','R1'), ('c','C2')]):
+    for node_data in enumerate([
+            ('c','C1'), ('rf','R1'), ('pf','R1'), ('c','C2')
+        ]):
         n = node_data[0] + 1
         p1.node[n]['type'] = node_data[1][0]
         p1.node[n]['mid'] = node_data[1][1]
 
     p2 = nx.DiGraph()
     p2.add_path(range(1,5))
-    for node_data in enumerate([('c','C3'), ('rr','R2'), ('pr','R2'), ('c','C4')]):
+    for node_data in enumerate([
+            ('c','C3'), ('rr','R2'), ('pr','R2'), ('c','C4')
+        ]):
         n = node_data[0] + 1
         p2.node[n]['type'] = node_data[1][0]
         p2.node[n]['mid'] = node_data[1][1]
@@ -43,32 +47,38 @@ def test_CountRxns():
     p3 = nx.DiGraph()
     p3.add_node(1, type='c', mid='C5')
 
-    p4 = [('c','C6'), ('rf','R3'), ('pf','R3'), ('c','C7'), ('rr','R3'), ('rp','R3'), ('c','C8')]
+    p4 = [
+        ('c','C6'), ('rf','R3'), ('pf','R3'),
+        ('c','C7'), ('rr','R3'), ('rp','R3'),
+        ('c','C8')
+    ]
     p4 = nx.DiGraph()
     p4.add_path(range(1,8))
-    for node_data in enumerate([('c','C6'), ('rf','R3'), ('pf','R3'), ('c','C7'), ('rr','R3'), ('rp','R3'), ('c','C8')]):
+    for node_data in enumerate([
+            ('c','C6'), ('rf','R3'), ('pf','R3'),
+            ('c','C7'), ('rr','R3'), ('rp','R3'),
+            ('c','C8')
+        ]):
         n = node_data[0] + 1
         p4.node[n]['type'] = node_data[1][0]
         p4.node[n]['mid'] = node_data[1][1]
 
-    assert CountRxns(p1) == 1
-    assert CountRxns(p2) == 1
-    assert CountRxns(p3) == 0
-    assert CountRxns(p4) == 1
+    assert count_reactions(p1) == 1
+    assert count_reactions(p2) == 1
+    assert count_reactions(p3) == 0
+    assert count_reactions(p4) == 1
 
 
-def FindPaths(network, reactant_node, compound_node, reaction_limit):
-    """
-    Find all simple paths from an origin reactant node to a target compound node,
-    limiting the total number of reactions.
-    """
+def find_paths(network, reactant_node, compound_node, reaction_limit):
+    """Find all simple paths from an origin reactant node to a target
+    compound node, limiting the total number of reactions."""
 
     paths = []
 
     if nx.has_path(network, reactant_node, compound_node):
         for path in nx.shortest_simple_paths(network, reactant_node, compound_node):
             if len(path)/3 > reaction_limit:
-                # Dividing the path length by three gives the number of reaction steps
+                # Dividing path length by three yields reaction step number
                 break
             if nx.is_directed_acyclic_graph(network.subgraph(path)):
                 # Only paths that represent an acyclic sub-network are allowed
@@ -77,7 +87,7 @@ def FindPaths(network, reactant_node, compound_node, reaction_limit):
 
     return paths
 
-def test_FindPaths():
+def test_find_paths():
 
     # Set up testing network
     G = nx.DiGraph()
@@ -90,18 +100,24 @@ def test_FindPaths():
     G.add_path([2,17,18,4,19,20,2])
 
     # Perform testing
-    assert FindPaths(G, 5, 1, 5) == [] # Cyclicity
-    assert FindPaths(G, 5, 4, 1) == [] # Path length limit 1
-    assert FindPaths(G, 5, 4, 2) == [[5,6,2,17,18,4]] # Path length limit 2
-    assert len(FindPaths(G, 5, 4, 3)) == 2 # Path length limit 3
-    assert FindPaths(G, 13, 2, 2) == [[13,14,4,19,20,2]] # Different starting point + Cyclicity
+
+    # Cyclicity
+    assert find_paths(G, 5, 1, 5) == []
+    # Path length limit 1
+    assert find_paths(G, 5, 4, 1) == []
+    # Path length limit 2
+    assert find_paths(G, 5, 4, 2) == [[5,6,2,17,18,4]]
+    # Path length limit 3
+    assert len(find_paths(G, 5, 4, 3)) == 2
+    # Different starting point + Cyclicity
+    assert find_paths(G, 13, 2, 2) == [[13,14,4,19,20,2]]
 
 
-def GeneratePaths(network, target_node, reaction_limit, n_procs=1, quiet=False):
+def generate_paths(network, target_node, reaction_limit, n_procs=1, quiet=False):
     """Generate a list of paths to a target node from origin reactant nodes."""
 
     if not quiet:
-        sWrite("Generating paths...\n")
+        s_out("Generating paths...\n")
 
     # The maximum number of processes is (mp.cpu_count - 2)
     # This allows for some overhead for the main process and manager
@@ -111,19 +127,19 @@ def GeneratePaths(network, target_node, reaction_limit, n_procs=1, quiet=False):
         else:
             n_procs = 1
 
-    # Define the Worker
-    def Worker():
+    # Define the worker
+    def worker():
         while True:
             origin_node = Work.get()
             if origin_node is None:
                 break
-            paths = FindPaths(network, origin_node, target_node, reaction_limit)
+            paths = find_paths(network, origin_node, target_node, reaction_limit)
             output.extend(paths)
             with lock:
                 n_work_done.value += 1
 
     # Set up reporter thread
-    def Reporter():
+    def reporter():
         t_start = time.time()
         n_left = Work.qsize()
         while n_left > 0:
@@ -139,16 +155,18 @@ def GeneratePaths(network, target_node, reaction_limit, n_procs=1, quiet=False):
             else:
                 t_left_str = '.:..:..'
             status_format = "{0:<10} {1:<25} {2:<25}"
-            progress = float(n_done / n_work * 100)
-            status = '\r' + status_format.format("%0.1f%%" % progress, str(n_made) + " paths found.", "Time left: " + t_left_str)
-            sWrite(status)
+            progress = "%0.1f%%" % float(n_done / n_work * 100)
+            found = str(n_made) + " paths found."
+            t_out = "Time left: " + t_left_str
+            status = status_format.format(progress, found, t_out)
+            s_out('\r' + status)
             time.sleep(1)
 
     with mp.Manager() as manager:
         # Initialize Work queue in manager
         Work = manager.Queue()
 
-        for origin_node in FindValidReactantNodes(network):
+        for origin_node in find_valid_reactant_nodes(network):
             Work.put(origin_node)
 
         # Place stop signals on queue
@@ -166,13 +184,13 @@ def GeneratePaths(network, target_node, reaction_limit, n_procs=1, quiet=False):
 
         # Start reporter
         if not quiet:
-            reporter = threading.Thread(target=Reporter)
+            reporter = threading.Thread(target=reporter)
             reporter.start()
 
         # Start processes
         procs = []
         for i in range(n_procs):
-            p = mp.Process(target=Worker)
+            p = mp.Process(target=worker)
             procs.append(p)
             p.start()
 
@@ -188,12 +206,12 @@ def GeneratePaths(network, target_node, reaction_limit, n_procs=1, quiet=False):
         # Stop reporter
         if not quiet:
             reporter.join()
-            sWrite("\nDone.\n")
+            s_out("\nDone.\n")
 
         return list(output)
 
 
-def test_GeneratePaths():
+def test_generate_paths():
     G = nx.DiGraph()
 
     G.add_nodes_from([1,4,9,14,22,27,32,37,42,47,52], type='c', start=False)
@@ -240,7 +258,7 @@ def test_GeneratePaths():
     assert only_one_reactant
 
 
-    paths = GeneratePaths(G, 22, 5, n_procs=4)
+    paths = generate_paths(G, 22, 5, n_procs=4)
 
     assert len(paths) == 9
 
@@ -254,25 +272,25 @@ def test_GeneratePaths():
     assert [45,46,47,55,56,22] in paths
     assert [40,41,42,45,46,47,55,56,22] in paths
 
-    paths_2 = GeneratePaths(G, 9, 2, n_procs=4)
+    paths_2 = generate_paths(G, 9, 2, n_procs=4)
 
     assert len(paths_2) == 2
 
     assert [2,3,4,7,8,9] in paths_2
     assert [38,39,22,23,24,9] in paths_2
 
-    assert GeneratePaths(G, 9, 1) == []
+    assert generate_paths(G, 9, 1) == []
 
 
-def ProducedNodes(network):
-    """Creates a set of all compound nodes produced by the reactions in the network."""
+def nodes_being_produced(network):
+    """Create set of compound nodes produced by the reactions in the network."""
     produced_nodes = set()
     for node in network.nodes():
         if network.node[node]['type'] in {'pf','pr'}:
             produced_nodes = produced_nodes.union(network.node[node]['c'])
     return produced_nodes
 
-def test_ProducedNodes():
+def test_nodes_being_produced():
     G = nx.DiGraph()
     G.add_nodes_from([1,2,3], type='c')
     G.add_nodes_from([10,20], type='pf')
@@ -283,10 +301,10 @@ def test_ProducedNodes():
     G.node[30]['c'] = set([4])
     G.node[40]['c'] = set([5])
 
-    assert ProducedNodes(G) == set([1,2,3,4,5])
+    assert nodes_being_produced(G) == set([1,2,3,4,5])
 
 
-def RemoveIncompleteReactions(network):
+def remove_incomplete_reactions(network):
     """
     Removes reactions that require reactants not provided as start compounds or
     as products in other reactions of the network.
@@ -298,7 +316,7 @@ def RemoveIncompleteReactions(network):
     additional reactions 'incomplete' in terms of reactant presence.
     """
 
-    start_comp_nodes = FindStartCompNodes(network)
+    start_comp_nodes = find_start_comp_nodes(network)
 
     while True:
 
@@ -311,22 +329,31 @@ def RemoveIncompleteReactions(network):
             pass
 
         # Determine what compounds are available
-        available_comp_nodes = start_comp_nodes.union(ProducedNodes(network))
+        available = start_comp_nodes.union(nodes_being_produced(network))
 
-        # Determine what reactions should be removed based on unfulfilled reactant requirements
+        # Determine what reactions should be removed based on
+        # unfulfilled reactant requirements
         nodes_to_remove = set()
         for node in network.nodes():
             if network.node[node]['type'] in {'rf','rr'}:
-                if not network.node[node]['c'].issubset(available_comp_nodes):
+                if not network.node[node]['c'].issubset(available):
                     nodes_to_remove.add(node)
-                    nodes_to_remove.add(network.successors(node)[0]) # Reactant nodes have one successor, i.e. a product node
-                    # Go through and remove compounds directly downstream of the reaction, if they are connected only to this reaction
-                    for comp_node in network.successors(network.successors(node)[0]):
+                    nodes_to_remove.add(network.successors(node)[0])
+                    # Reactant nodes have one successor, i.e. a product node
+                    # Go through and remove compounds directly downstream of the
+                    # reaction, if they are connected only to this reaction
+                    downstream = network.successors(network.successors(node)[0])
+                    for comp_node in downstream:
                         if network.node[comp_node]['type'] != 'c':
-                            sError("Warning: '%s' is not a compound node as expected (successor of %s)" (str(comp_node), str(network.successors(node)[0])))
+                            s_err("Warning: '" + str(comp_node) + \
+                            "' is not a compound node as expected (successor" +\
+                            " of " + str(network.successors(node)[0]) + ")")
                             continue
                         else:
-                            if network.predecessors(comp_node) == network.successors(node) and not network.node[comp_node]['start']:
+                            dependent = network.predecessors(comp_node) == \
+                            network.successors(node)
+                            start = network.node[comp_node]['start']
+                            if dependent and not start:
                                 nodes_to_remove.add(comp_node)
 
         # Count the number of nodes before purging
@@ -336,7 +363,7 @@ def RemoveIncompleteReactions(network):
         for node in nodes_to_remove:
             network.remove_node(node)
 
-def test_RemoveIncompleteReactions():
+def test_remove_incomplete_reactions():
     G = nx.DiGraph()
 
     # Reactions tier 1
@@ -346,16 +373,20 @@ def test_RemoveIncompleteReactions():
     G.add_node(4,type='pr',c=set([105]))
 
     # Reactions tier 2
-    G.add_node(5,type='rf',c=set([103])) # Non-origin reaction that is complete
+
+    # Non-origin reaction that is complete:
+    G.add_node(5,type='rf',c=set([103]))
     G.add_node(6,type='pf',c=set([106,107]))
-    G.add_node(7,type='rf',c=set([105,108])) # Non-origin reaction that is incomplete
+    # Non-origin reaction that is incomplete:
+    G.add_node(7,type='rf',c=set([105,108]))
     G.add_node(8,type='pf',c=set([109]))
 
     # Reactions tier 3
     G.add_node(9,type='rr',c=set([107,109]))
     G.add_node(10,type='pr',c=set([110]))
 
-    # Compounds (only start compounds and those in the direct path from origin to target)
+    # Compounds (only start compounds and those in
+    # the direct path from origin to target)
     G.add_nodes_from([101,102,104], type='c', start=True)
     G.add_nodes_from([103,105,107,109,110], type='c', start=False)
 
@@ -364,7 +395,7 @@ def test_RemoveIncompleteReactions():
     G.add_path([104,3,4,105,7,8,109,9,10,110])
     G.add_edge(102,1)
 
-    RemoveIncompleteReactions(G)
+    remove_incomplete_reactions(G)
 
     assert set(G.nodes()) == set([101,102,103,104,105,107,1,2,3,4,5,6])
 
@@ -383,19 +414,19 @@ def test_RemoveIncompleteReactions():
     H.add_path([3,201,202,2])
     H.add_edge(202,4)
 
-    RemoveIncompleteReactions(H)
+    remove_incomplete_reactions(H)
 
     assert set(H.nodes()) == set([1,101,102,2,3])
 
 
-def BranchNodes(network, severed=False):
-    """
-    Identifies reactant nodes that represent branch points in the pathway network.
+def find_branch_nodes(network, severed=False):
+    """Identifies reactant nodes that represent branch points in the pathway
+    network.
 
     IMPORTANT: This function assumes that non-start predecessors leading to a
     severed branch are not present in the network, as would be the case for
-    compounds not found in a direct path from origin to target.
-    """
+    compounds not found in a direct path from origin to target."""
+
     branch_nodes = set()
 
     for node in network.nodes():
@@ -420,12 +451,14 @@ def BranchNodes(network, severed=False):
                 else:
                     # A severed branch node lacks 1 or more predecessors
                     # compared to what is listed in the 'c' set
-                    if len(network.predecessors(node)) < len(network.node[node]['c']):
+                    pred_num = len(network.predecessors(node))
+                    c_num = len(network.node[node]['c'])
+                    if pred_num < c_num:
                         branch_nodes.add(node)
 
     return branch_nodes
 
-def test_BranchNodes():
+def test_find_branch_nodes():
     # Set up testing network
     G = nx.DiGraph()
 
@@ -469,27 +502,27 @@ def test_BranchNodes():
     G.add_edge(10,115)
 
     # Ensure branch node identification is working
-    assert BranchNodes(G) == set([111,113,115])
+    assert find_branch_nodes(G) == set([111,113,115])
 
-    # Now let's sever some branches and let the function identify severed branch nodes
+    # Sever branches and then identify them
     G.remove_nodes_from([107,108,8])
-    assert BranchNodes(G, severed=True) == set([113])
+    assert find_branch_nodes(G, severed=True) == set([113])
     G.remove_nodes_from([109,110,9])
-    assert BranchNodes(G, severed=True) == set([113])
+    assert find_branch_nodes(G, severed=True) == set([113])
     G.remove_nodes_from([105,106,7])
-    assert BranchNodes(G, severed=True) == set([111,113])
+    assert find_branch_nodes(G, severed=True) == set([111,113])
 
     H = G.copy()
     G.remove_nodes_from([111,112,11])
     H.remove_nodes_from([113,114,12])
-    assert BranchNodes(G, severed=True) == set([113,115])
-    assert BranchNodes(H, severed=True) == set([111,115])
+    assert find_branch_nodes(G, severed=True) == set([113,115])
+    assert find_branch_nodes(H, severed=True) == set([111,115])
 
     G.remove_nodes_from([113,114,12])
-    assert BranchNodes(G, severed=True) == set([115])
+    assert find_branch_nodes(G, severed=True) == set([115])
 
 
-def SwitchNodes(network):
+def find_switch_nodes(network):
     """
     Identifies and returns a list of 'switch nodes' in the network.
 
@@ -503,17 +536,17 @@ def SwitchNodes(network):
                 switch_nodes.add(node)
     return switch_nodes
 
-def test_SwitchNodes():
+def test_find_switch_nodes():
     # Switch nodes are compound nodes that have multiple predecessors
     G = nx.DiGraph()
     G.add_nodes_from([1,2], type='c')
     G.add_nodes_from([101,201,301], type='pf')
     G.add_edges_from([(101,1),(201,2),(301,2)])
 
-    assert SwitchNodes(G) == set([2])
+    assert find_switch_nodes(G) == set([2])
 
 
-def GenerateTermini(network):
+def generate_termini(network):
     """
     Generates termini and eliminates start-compound induced branching by
     cutting all start compound to reactant node edges.
@@ -523,7 +556,7 @@ def GenerateTermini(network):
             if network.node[node]['start']:
                 network.remove_edges_from(network.out_edges(node))
 
-def test_GenerateTermini():
+def test_generate_termini():
     G = nx.DiGraph()
     G.add_nodes_from([1,3], type='c', start=True)
     G.add_nodes_from([2,4], type='c', start=False)
@@ -537,51 +570,21 @@ def test_GenerateTermini():
 
     H = G.copy()
 
-    GenerateTermini(G)
+    generate_termini(G)
 
     assert len(G.nodes()) == len(H.nodes())
     assert set(G.edges()) == {(101,102),(102,2),(2,201),(201,202),(202,4)}
     assert nx.has_path(G, 101, 4)
 
 
-def SwitchConnect(switch_nodes, path):
-    """
-    Creates a list of edges connecting switch nodes in the correct order
-    according to the provided switch node set and path.
-    """
-    connections = []
-    mate = []
-    for node in path:
-        if node in switch_nodes:
-            if len(mate) == 1:
-                connections.append((mate[0], node))
-            mate = [node]
-    return connections
-
-def test_SwitchConnect():
-    path = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
-    switch_nodes = set([3,9,12,15])
-    assert SwitchConnect(switch_nodes, path) == [(3,9),(9,12),(12,15)]
-
-def BranchConnect():
-    # Branching needs to be considered when flicking switches
-    return None
-
-def DecisionTree(switch_nodes, paths):
-    """
-    Constructs a decision tree for switch nodes when given a complete set of
-    paths from origin nodes to the target node and a set of switch nodes.
-    """
-
-
-def DiGraphConnectedComponent(network, target_node):
+def digraph_connected_component(network, target_node):
     """
     Performs a reverse depth-first search to find all nodes that have a path
     leading to the target node. Then returns that component of the network.
     """
     return set(nx.dfs_preorder_nodes(network.reverse(), target_node))
 
-def test_DiGraphConnectedComponent():
+def test_digraph_connected_component():
     G = nx.DiGraph()
     G.add_path([1,2,3,4])
     G.add_path([1,5,6,7])
@@ -592,39 +595,43 @@ def test_DiGraphConnectedComponent():
     H.add_path([1,2,3,4])
     H.add_path([8,9,10,4])
 
-    Y = G.subgraph(DiGraphConnectedComponent(G,4))
+    Y = G.subgraph(digraph_connected_component(G,4))
 
     assert nx.is_isomorphic(H, Y)
     assert set(H.nodes()) == set(Y.nodes())
 
 
-def PathSubNetwork(network, paths, target_node):
+def subnetwork_from_paths(network, paths, target_node):
 
-    sWrite("\nConstructing sub-network from identified paths...")
+    s_out("\nConstructing sub-network from identified paths...")
 
     # Acquire basic data
     path_nodes = set([n for p in paths for n in p])
-    start_comp_nodes = FindStartCompNodes(network)
+    start_comp_nodes = find_start_comp_nodes(network)
 
-    # Construct a sub-network of all paths, start compounds and produced compounds
+    # Construct a sub-network of all paths,
+    # start compounds and produced compounds
     subnet = network.subgraph(path_nodes.union(start_comp_nodes))
-    subnet = network.subgraph(set(subnet.nodes()).union(ProducedNodes(subnet)))
+    subnet = network.subgraph(
+        set(subnet.nodes()).union(nodes_being_produced(subnet))
+    )
 
     # Identify the incomplete reactions and remove them
-    RemoveIncompleteReactions(subnet)
+    remove_incomplete_reactions(subnet)
 
-    # Cut connection to start compounds in order to generate terminal (leaf) reactant nodes
-    GenerateTermini(subnet)
+    # Cut connection to start compounds in order to
+    # generate terminal (leaf) reactant nodes
+    generate_termini(subnet)
 
     # Reduce to the connected component
-    subnet = subnet.subgraph(DiGraphConnectedComponent(subnet, target_node))
+    subnet = subnet.subgraph(digraph_connected_component(subnet, target_node))
 
-    sWrite(" Done.\n")
+    s_out(" Done.\n")
 
     return subnet
 
-def test_PathSubNetwork():
-    # Test case has the following in common with test_GeneratePaths:
+def test_subnetwork_from_paths():
+    # Test case has the following in common with test_generate_paths:
     G = nx.DiGraph()
 
     G.add_nodes_from([1,4,9,14,22,27,32,37,42,47,52], type='c', start=False)
@@ -659,17 +666,21 @@ def test_PathSubNetwork():
     for node in rf + rr: G.node[node]['c'] = set(G.predecessors(node))
     for node in pf + pr: G.node[node]['c'] = set(G.successors(node))
 
-    paths = GeneratePaths(G, 22, 4, n_procs=4)
-    subnet = PathSubNetwork(G, paths, 22)
+    paths = generate_paths(G, 22, 4, n_procs=4)
+    subnet = subnetwork_from_paths(G, paths, 22)
 
-    assert set(subnet.nodes()) == set([2,3,4,7,8,12,13,14,101,102,9,20,21,22,56,55,47,54,53,46,45,39,38])
+    assert set(subnet.nodes()) == set([
+        2,3,4,7,8,12,13,14,101,
+        102,9,20,21,22,56,55,
+        47,54,53,46,45,39,38
+    ])
     assert len(subnet.nodes()) == 23
     assert len(subnet.edges()) == 23
 
 
-def FormatGraphml(network, subnet):
+def format_graphml(network, subnet):
     # Need to label the origin reactant nodes
-    origins = FindValidReactantNodes(network)
+    origins = find_valid_reactant_nodes(network)
 
     for node in subnet.nodes():
         if subnet.node[node]['type'] in {'rf','rr'}:
@@ -681,10 +692,11 @@ def FormatGraphml(network, subnet):
     # Also need to create compound name labels
     for node in subnet.nodes():
         if subnet.node[node]['type'] == 'c':
+            mid = network.node[node]['mid']
             try:
-                common_name = network.graph['mine_data'][network.node[node]['mid']]['Names'][0]
+                common_name = network.graph['mine_data'][mid]['Names'][0]
             except KeyError:
-                common_name = network.graph['mine_data'][network.node[node]['mid']]['Formula']
+                common_name = network.graph['mine_data'][mid]['Formula']
             subnet.node[node]['common_name'] = common_name
 
 
@@ -693,10 +705,11 @@ def FormatGraphml(network, subnet):
         if subnet.node[node]['type'] != 'c':
             c_names = []
             for c_node in subnet.node[node]['c']:
+                mid = network.node[c_node]['mid']
                 try:
-                    common_name = network.graph['mine_data'][network.node[c_node]['mid']]['Names'][0]
+                    common_name = network.graph['mine_data'][mid]['Names'][0]
                 except KeyError:
-                    common_name = network.graph['mine_data'][network.node[c_node]['mid']]['Formula']
+                    common_name = network.graph['mine_data'][mid]['Formula']
                 c_names.append(common_name)
             subnet.node[node]['c_names'] = " + ".join(c_names)
 
@@ -714,12 +727,12 @@ def FormatGraphml(network, subnet):
     return outnet
 
 
-def CombinePaths(network, paths, target_node):
+def paths_to_pathways(network, paths, target_node):
     # Code here
     return None
 
-def test_CombinePaths():
-    # Set up testing network - Same as for IdentifyBranchNodes
+def test_paths_to_pathways():
+    # Set up testing network - Same as for Identifyfind_branch_nodes
     G = nx.DiGraph()
 
     # Add Compounds
@@ -794,11 +807,11 @@ def test_CombinePaths():
     G.node[404]['type'] = 'pr'
     G.node[404]['c'] = set([13])
 
-    # Also adding a shortcut from 40 to 12 that will result in an invalid reaction
+    # Also adding a shortcut from 40 to 12 that will result in an invalid rxn
     G.add_path([40,501,502,12])
     G.add_edge(50,501)
     G.node[50]['type'] = 'c'
-    G.node[50]['start'] = False # This compound should result in an incomplete reaction
+    G.node[50]['start'] = False # This compound should yield an incomplete rxn
     G.node[501]['type'] = 'rr'
     G.node[501]['c'] = set([40,50])
     G.node[502]['type'] = 'pr'
@@ -817,8 +830,8 @@ def test_CombinePaths():
     ]
 
     # Letting the automated functions produce a result
-    path_bins = GeneratePaths(G, 13, 5, quiet=True)
-    output_branched_paths = CombinePaths(G, path_bins, n_procs=2)
+    path_bins = generate_paths(G, 13, 5, quiet=True)
+    output_branched_paths = paths_to_pathways(G, path_bins, n_procs=2)
 
     paths_equal = True
     missing = []
@@ -833,8 +846,8 @@ def test_CombinePaths():
             unexpected.append(sorted(list(path)))
 
     if not paths_equal:
-        sError("Missing: " + str(missing) + "\n")
-        sError("Unexpected: " + str(unexpected) + "\n")
+        s_err("Missing: " + str(missing) + "\n")
+        s_err("Unexpected: " + str(unexpected) + "\n")
 
     assert paths_equal
     assert len(expected_branched_paths) == len(output_branched_paths)
@@ -867,8 +880,8 @@ def test_CombinePaths():
     set([101,102,2,201,202,5,401,402,6,501,502,4])
     ]
 
-    path_bins = GeneratePaths(N, 6, 5, quiet=True)
-    output_branched_paths = CombinePaths(N, path_bins, n_procs=2)
+    path_bins = generate_paths(N, 6, 5, quiet=True)
+    output_branched_paths = paths_to_pathways(N, path_bins, n_procs=2)
 
     paths_equal = True
     missing = []
@@ -883,15 +896,15 @@ def test_CombinePaths():
             unexpected.append(sorted(list(path)))
 
     if not paths_equal:
-        sError("Missing: " + str(missing) + "\n")
-        sError("Unexpected: " + str(unexpected) + "\n")
+        s_err("Missing: " + str(missing) + "\n")
+        s_err("Unexpected: " + str(unexpected) + "\n")
 
     assert paths_equal
     assert len(N_expected_paths) == len(output_branched_paths)
 
 
 
-def ParseCompound(compound, network):
+def parse_compound(compound, network):
     """Determines the type of compound identifier and returns the node."""
 
     node = None
@@ -903,40 +916,54 @@ def ParseCompound(compound, network):
         try:
             node = network.graph['cmid2node'][compound]
             if not node in network.nodes():
-                sError("Error: MINE ID '%s' appears to not be available in the network.\n" % compound)
+                s_err("Error: MINE ID '" + compound + \
+                "' appears to not be available in the network.\n")
                 node = None
         except KeyError:
-            sError("Error: MINE ID '%s' appears to not be available in the network.\n" % compound)
+            s_err("Error: MINE ID '" + compound + \
+            "' appears to not be available in the network.\n")
     elif kegg_match:
         try:
             nodes = network.graph['kegg2nodes'][compound]
             if len(nodes) > 1:
-                nodes = "'\n'".join(sorted([network.node[n]['mid'] for n in nodes]))
-                sError("Error: '%s' refers to multiple nodes. Use --exact_comp_id and --compound followed by one of:\n'%s'\n" % (compound, nodes))
+                nodes = "'\n'".join(
+                    sorted([network.node[n]['mid'] for n in nodes])
+                )
+                s_err("Error: '" + compound + "' refers to multiple nodes." + \
+                " Use --exact_comp_id and --compound followed by one of:\n'" + \
+                nodes + "'\n")
             else:
                 node = list(nodes)[0]
                 if not node in network.nodes():
-                    sError("Error: KEGG ID '%s' appears to not be available in the network.\n" % compound)
+                    s_err("Error: KEGG ID '" + compound + \
+                    "' appears to not be available in the network.\n")
                     node = None
         except KeyError:
-            sError("Error: KEGG ID '%s' appears to not be available in the network.\n" % compound)
+            s_err("Error: KEGG ID '" + compound + \
+            "' appears to not be available in the network.\n")
     else:
         try:
             nodes = network.graph['name2nodes'][compound]
             if len(nodes) > 1:
-                nodes = "'\n'".join(sorted([network.node[n]['mid'] for n in nodes]))
-                sError("Error: '%s' refers to multiple nodes. Use --exact_comp_id and --compound followed by one of:\n'%s'\n" % (compound, nodes))
+                nodes = "'\n'".join(
+                    sorted([network.node[n]['mid'] for n in nodes])
+                )
+                s_err("Error: '" + compound + "' refers to multiple nodes." + \
+                " Use --exact_comp_id and --compound followed by one of:\n'" + \
+                nodes + "'\n")
             else:
                 node = list(nodes)[0]
                 if not node in network.nodes():
-                    sError("Error: Name '%s' appears to not be available in the network.\n" % compound)
+                    s_err("Error: Name '" + compound + \
+                    "' appears to not be available in the network.\n")
                     node = None
         except KeyError:
-            sError("Error: Name '%s' appears to not be available in the network.\n" % compound)
+            s_err("Error: Name '" + compound + \
+            "' appears to not be available in the network.\n")
 
     return node
 
-def test_ParseCompound(capsys):
+def test_parse_compound(capsys):
     G = nx.DiGraph()
     G.graph['cmid2node'] = {}
     G.graph['kegg2nodes'] = {}
@@ -980,29 +1007,37 @@ def test_ParseCompound(capsys):
         G.node[n]['mid'] = node2cmid[n]
 
     # Test KEGG IDs
-    assert ParseCompound('C31890',G) == 1
-    assert ParseCompound('C00291',G) == 2
-    assert ParseCompound('C67559',G) == 3
-    assert ParseCompound('C67560',G) == 3
+    assert parse_compound('C31890',G) == 1
+    assert parse_compound('C00291',G) == 2
+    assert parse_compound('C67559',G) == 3
+    assert parse_compound('C67560',G) == 3
 
     # Test MINE IDs
-    assert [ParseCompound(c,G) for c in [node2cmid[n] for n in range(1,10)]] == list(range(1,10))
+    res = [parse_compound(c,G) for c in [node2cmid[n] for n in range(1,10)]]
+    assert res == list(range(1,10))
 
     # Test Names
-    assert ParseCompound('Alpha',G) == ParseCompound('n-Alpha',G) == 7
-    assert ParseCompound('Beta',G) == ParseCompound('n-Beta',G) == 8
-    assert ParseCompound('Gamma',G) == ParseCompound('n-Gamma',G) == 9
-    assert ParseCompound('Twin',G) == None
+    assert parse_compound('Alpha',G) == parse_compound('n-Alpha',G) == 7
+    assert parse_compound('Beta',G) == parse_compound('n-Beta',G) == 8
+    assert parse_compound('Gamma',G) == parse_compound('n-Gamma',G) == 9
+    assert parse_compound('Twin',G) == None
 
     # Test error output
-    assert ParseCompound('Cffffffffffffffffffffffffffffffffffffffff', G) == None
-    assert ParseCompound('C00001', G) == None
-    assert ParseCompound('Delta', G) == None
+    assert parse_compound('Cffffffffffffffffffffffffffffffffffffffff',G) == None
+    assert parse_compound('C00001', G) == None
+    assert parse_compound('Delta', G) == None
 
-    exp_err = "Error: '%s' refers to multiple nodes. Use --exact_comp_id and --compound followed by one of:\n'%s'\n'%s'\n" % ('Twin','C12c16f3e8910911f982fe6fcd541c35bca59119e','C5a2e2841cff1008380531689c8c45b6dbecd04b6')
-    exp_err = exp_err + "Error: MINE ID '%s' appears to not be available in the network.\n" % 'Cffffffffffffffffffffffffffffffffffffffff'
-    exp_err = exp_err + "Error: KEGG ID '%s' appears to not be available in the network.\n" % 'C00001'
-    exp_err = exp_err + "Error: Name '%s' appears to not be available in the network.\n" % 'Delta'
+    exp_err = "Error: 'Twin' refers to multiple nodes. Use --exact_comp_id" + \
+    " and --compound followed by one of:\n" + \
+    "'C12c16f3e8910911f982fe6fcd541c35bca59119e'\n" + \
+    "'C5a2e2841cff1008380531689c8c45b6dbecd04b6'\n"
+    exp_err = exp_err + "Error: MINE ID " + \
+    "'Cffffffffffffffffffffffffffffffffffffffff' appears to not be " + \
+    "available in the network.\n"
+    exp_err = exp_err + "Error: KEGG ID 'C00001' appears to not be " + \
+    "available in the network.\n"
+    exp_err = exp_err + "Error: Name 'Delta' appears to not be " + \
+    "available in the network.\n"
 
     out, err = capsys.readouterr()
 
@@ -1010,20 +1045,21 @@ def test_ParseCompound(capsys):
 
 
 # Main code block
-def main(infile_name, compound, exact_comp_id, reaction_limit, n_procs, sub_network_out, outfile_name):
+def main(infile_name, compound, exact_comp_id, reaction_limit,
+    n_procs, sub_network_out, outfile_name):
 
     # Default results are empty
     results = {}
 
     # Load the network
-    sWrite("\nLoading network pickle...")
+    s_out("\nLoading network pickle...")
     network = pickle.load(open(infile_name, 'rb'))
-    sWrite(" Done.\n")
+    s_out(" Done.\n")
 
     # Pathway enumeration
     if compound:
         if not exact_comp_id:
-            target_node = ParseCompound(compound, network)
+            target_node = parse_compound(compound, network)
         else:
             try:
                 target_node = network.graph['cmid2node'][compound]
@@ -1031,33 +1067,56 @@ def main(infile_name, compound, exact_comp_id, reaction_limit, n_procs, sub_netw
                 target_node = None
 
         if target_node == None:
-            sys.exit("Error: Target node was not found. Check compound '%s'.\n" % compound)
-        paths = GeneratePaths(network, target_node, reaction_limit, n_procs)
+            sys.exit("Error: Target node was not found. Check compound '" + \
+            compound + "'.\n")
+        paths = generate_paths(network, target_node, reaction_limit, n_procs)
 
         # Save sub-network graphml
         if sub_network_out:
-            subnet = PathSubNetwork(network, paths, target_node)
-            sWrite("\nWriting sub-network to graphml...")
-            subnet = FormatGraphml(network, subnet)
+            subnet = subnetwork_from_paths(network, paths, target_node)
+            s_out("\nWriting sub-network to graphml...")
+            subnet = format_graphml(network, subnet)
             nx.write_graphml(subnet, sub_network_out)
-            sWrite(" Done.\n")
+            s_out(" Done.\n")
 
     # Save results
     if outfile_name:
-        sWrite("\nWriting results to pickle...")
+        s_out("\nWriting results to pickle...")
         pickle.dump(paths, open(outfile_name, 'wb'))
-        sWrite(" Done.\n")
+        s_out(" Done.\n")
 
 
 if __name__ == "__main__":
     # Read arguments from the commandline
     parser = argparse.ArgumentParser()
-    parser.add_argument('infile', help='Read mepmap network pickle.')
-    parser.add_argument('-o', '--outfile', type=str, default=False, help='Save identified pathways in pickle.')
-    parser.add_argument('-s', '--sub_network', type=str, default=False, help='Save sub-network as graphml (requires -c).')
-    parser.add_argument('-c', '--compound', type=str, default=False, help='Target compound.')
-    parser.add_argument('-e', '--exact_comp_id', action='store_true', help='Look for exact compound ID.')
-    parser.add_argument('-r', '--reactions', type=int, default=5, help='Maximum number of reactions.')
-    parser.add_argument('-p', '--processes', type=int, default=1, help='Number of parallel processes to run.')
+    parser.add_argument(
+        'infile',
+        help='Read mepmap network pickle.'
+    )
+    parser.add_argument(
+        '-o', '--outfile', type=str, default=False,
+        help='Save identified pathways in pickle.'
+    )
+    parser.add_argument(
+        '-s', '--sub_network', type=str, default=False,
+        help='Save sub-network as graphml (requires -c).'
+    )
+    parser.add_argument(
+        '-c', '--compound', type=str, default=False,
+        help='Target compound.'
+    )
+    parser.add_argument(
+        '-e', '--exact_comp_id', action='store_true',
+        help='Look for exact compound ID.'
+    )
+    parser.add_argument(
+        '-r', '--reactions', type=int, default=5,
+        help='Maximum number of reactions.'
+    )
+    parser.add_argument(
+        '-p', '--processes', type=int, default=1,
+        help='Number of parallel processes to run.'
+    )
     args = parser.parse_args()
-    main(args.infile, args.compound, args.exact_comp_id, args.reactions, args.processes, args.sub_network, args.outfile)
+    main(args.infile, args.compound, args.exact_comp_id, args.reactions, \
+    args.processes, args.sub_network, args.outfile)
