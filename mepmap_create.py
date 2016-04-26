@@ -15,10 +15,10 @@ from copy import deepcopy
 from itertools import repeat
 
 # Import scripts
-import MineClient3 as mc
-from MinetHelpers import *
-from MinetOriginHelpers import *
-from MinetKEGGHelpers import *
+import mineclient3 as mc
+from mepmap_helpers import *
+from mepmap_origin_helpers import *
+from mepmap_KEGG_helpers import *
 
 # Define functions
 def AllowReactionListing(kegg_comp, kegg_rxn):
@@ -1105,25 +1105,25 @@ def test_AddCompoundNode():
         }
 
 
-def CheckConnection(minetwork, c_node, r_node):
+def CheckConnection(network, c_node, r_node):
     """Checks that the compound-to-reaction node connection is valid."""
 
     con_check = False
 
-    c_mid = minetwork.node[c_node]['mid']
-    r_mid = minetwork.node[r_node]['mid']
-    r_type = minetwork.node[r_node]['type']
+    c_mid = network.node[c_node]['mid']
+    r_mid = network.node[r_node]['mid']
+    r_type = network.node[r_node]['type']
 
     if r_type in {'rf','pr'}:
         try:
-            if r_mid in minetwork.graph['mine_data'][c_mid]['Reactant_in']:
+            if r_mid in network.graph['mine_data'][c_mid]['Reactant_in']:
                 con_check = True
         except KeyError:
             pass
 
     if r_type in {'pf','rr'}:
         try:
-            if r_mid in minetwork.graph['mine_data'][c_mid]['Product_of']:
+            if r_mid in network.graph['mine_data'][c_mid]['Product_of']:
                 con_check = True
         except KeyError:
             pass
@@ -1398,14 +1398,14 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[]):
     start_comp_ids = ExpandStartCompIds(comp_dict, set(start_comp_ids), extra_kegg_ids=extra_kegg_ids)
 
     # Initialise directed graph
-    minetwork = nx.DiGraph(mine_data={**comp_dict, **rxn_dict})
+    network = nx.DiGraph(mine_data={**comp_dict, **rxn_dict})
 
     # Add all compounds
     n_comp = len(comp_dict)
     n_done = 0
     for comp_id in sorted(comp_dict.keys()):
         comp = comp_dict[comp_id]
-        minetwork = AddCompoundNode(minetwork, comp, start_comp_ids)
+        network = AddCompoundNode(network, comp, start_comp_ids)
         progress = float(100*n_done/n_comp)
         sWrite("\rAdding compounds... %0.1f%%" % progress)
         n_done += 1
@@ -1416,13 +1416,13 @@ def ConstructNetwork(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[]):
     n_done = 0
     for rxn_id in sorted(rxn_dict.keys()):
         rxn = rxn_dict[rxn_id]
-        minetwork = AddQuadReactionNode(minetwork, rxn)
+        network = AddQuadReactionNode(network, rxn)
         progress = float(100*n_done/n_rxn)
         sWrite("\rAdding reactions... %0.1f%%" % progress)
         n_done += 1
 
     print("\nDone.")
-    return minetwork
+    return network
 
 def test_ConstructNetwork(capsys):
     comp_dict = {}

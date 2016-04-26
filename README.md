@@ -1,21 +1,17 @@
-## minet - Tool for creating a NetworkX graph from MINE data
+## mepmap - Tools for creating and exploring metabolic reaction networks
 
-#### NAME
-minet
+#### Description
+**mepmap_create.py** constructs a network of potential metabolic reactions using
+resources supplied by KEGG (http://www.kegg.jp/) and MINE
+(http://minedatabase.mcs.anl.gov/).
 
-#### SYNOPSIS
-**minet** [-r *reaction_steps*] [-c *compound_limit*] *infile.txt* *outfile.pickle*
+**mepmap_path.py** performs path-finding, sub-network extraction and enumeration
+of putative biosynthetic pathways.
 
-#### DESCRIPTION
-**minet** reads a list of KEGG compound identifiers (e.g. C00469), then contacts the MINE database "KEGGexp2" and creates a NetworkX graph object from the connected reactions and compounds. The graph is saved as a Python Pickle. The maximum number of iterations (reaction steps) and maximum number of downloaded compounds (compound limit) can be specified by the user. The tool is implemented in Python 3.5.1.
-
-#### OPTIONS
--s *reaction_steps*
-Number of iterations (reaction steps) to use when building the network.
-
-#### DEPENDENCIES
+#### Dependencies
+Python ≥ 3.5.1
 Python NetworkX: https://github.com/networkx/networkx
-Python MINE-API: https://github.com/JamesJeffryes/MINE-API
+Python MINE-API: https://github.com/JamesJeffryes/MINE-API (**mineclient3.py**)
 
-#### AUTHOR
-Johannes Asplund-Samuelsson johannes.asplund.samuelsson@scilifelab.se
+#### Author
+Johannes Asplund-Samuelsson; <johannes.asplund.samuelsson@scilifelab.se>

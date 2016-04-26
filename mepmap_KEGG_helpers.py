@@ -10,7 +10,7 @@ from requests import get as rget
 from rdkit import Chem
 
 # Import scripts
-from MinetHelpers import *
+from mepmap_helpers import *
 
 # Define functions
 def GetKeggText(kegg_id, krest="http://rest.kegg.jp"):

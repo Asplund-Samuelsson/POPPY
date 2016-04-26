@@ -5,7 +5,7 @@ import networkx as nx
 import multiprocessing as mp
 
 # Import scripts
-from MinetHelpers import *
+from mepmap_helpers import *
 
 def FindStartCompNodes(network):
     """Returns a list starting compound nodes in a MINE network."""

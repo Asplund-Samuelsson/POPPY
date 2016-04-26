@@ -12,9 +12,9 @@ import threading
 import re
 
 # Import scripts
-import MineClient3 as mc
-from MinetOriginHelpers import *
-from MinetHelpers import *
+import mineclient3 as mc
+from mepmap_origin_helpers import *
+from mepmap_helpers import *
 
 # Define functions
 def CountRxns(network):
@@ -1052,7 +1052,7 @@ def main(infile_name, compound, exact_comp_id, reaction_limit, n_procs, sub_netw
 if __name__ == "__main__":
     # Read arguments from the commandline
     parser = argparse.ArgumentParser()
-    parser.add_argument('infile', help='Read minet network pickle.')
+    parser.add_argument('infile', help='Read mepmap network pickle.')
     parser.add_argument('-o', '--outfile', type=str, default=False, help='Save identified pathways in pickle.')
     parser.add_argument('-s', '--sub_network', type=str, default=False, help='Save sub-network as graphml (requires -c).')
     parser.add_argument('-c', '--compound', type=str, default=False, help='Target compound.')
