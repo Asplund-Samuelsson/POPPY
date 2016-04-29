@@ -23,8 +23,9 @@ from mepmap_KEGG_helpers import *
 # Define functions
 def allow_reaction_listing(kegg_comp, kegg_rxn):
     # Is the compound inorganic or CO2?
-    if not limit_carbon(kegg_comp, 0) or kegg_comp['_id'] == "C00011":
-        return False
+    if 'Formula' in kegg_comp.keys():
+        if not limit_carbon(kegg_comp, 0) or kegg_comp['_id'] == "C00011":
+            return False
     # Is the compound CoA or ACP?
     if kegg_comp['_id'] in {"C00010", "C00229"}:
         return False
@@ -3029,7 +3030,95 @@ def test_KEGG_rxns_from_MINE_rxns():
     assert exp_rxns == new_rxns
 
 
+def add_MINE_rxns_to_KEGG_comps(comps, rxns):
+    """Add MINE reactions to KEGG compound 'Reactant_in'/'Product_of' lists."""
 
+    # Initialize list of updated compounds
+    new_comps = []
+
+    # Iterate over the KEGG compounds
+    for comp in comps:
+
+        # Initialize a new compound
+        new_comp = deepcopy(comp)
+
+        # Check if the compound should list any of the reactions
+        for rxn in rxns:
+
+            # Check if the compound may list the reaction
+            if not allow_reaction_listing(comp, rxn):
+                continue
+
+            # Add the reaction to Reactant_in if applicable
+            if comp['_id'] in [c[1] for c in rxn['Reactants']]:
+                try:
+                    new_comp['Reactant_in'].append(rxn['_id'])
+                except KeyError:
+                    new_comp['Reactant_in'] = [rxn['_id']]
+
+            # Add the reaction to Product_of if applicable
+            if comp['_id'] in [c[1] for c in rxn['Products']]:
+                try:
+                    new_comp['Product_of'].append(rxn['_id'])
+                except KeyError:
+                    new_comp['Product_of'] = [rxn['_id']]
+
+        # Add the updated compound to the new compounds list
+        new_comps.append(new_comp)
+
+    return new_comps
+
+def test_add_MINE_rxns_to_KEGG_comps():
+    comps = [
+        {'_id':'C00001', 'Reactant_in':['R00001']},
+        {'_id':'C00002', 'Product_of':['R00001'], 'Reactant_in':['R00002']},
+        {'_id':'C00003'},
+        {'_id':'C00004', 'Product_of':['R00004']}
+    ]
+    rxns = [
+        {'_id':'R1_0',
+        'Reactants':[[1,'C00002'],[1,'C00004']],
+        'Products':[[1,'C00003'],[1,'C00001']],
+        'RPair':{
+            'main':('C00002_C00003','main'),
+            'cofac':('C00004_C00001','cofac')
+        }},
+        {'_id':'R2_2',
+        'Reactants':[[1,'C00003']],
+        'Products':[[1,'C00001']],
+        'RPair':{
+            'main':('C00003_C00001','main')
+        }},
+        {'_id':'R3_12',
+        'Reactants':[[1,'C00001'],[1,'C00003'],[1,'C00004']],
+        'Products':[[1,'C00002']],
+        'RPair':{
+            'main':('C00001_C00003_C00004_C00002','main')
+        }}
+    ]
+    exp_comps = [
+        {'_id':'C00001',
+            'Reactant_in':['R00001','R3_12'],
+            'Product_of':['R2_2']},
+        {'_id':'C00002',
+            'Product_of':['R00001','R3_12'],
+            'Reactant_in':['R00002','R1_0']},
+        {'_id':'C00003',
+            'Reactant_in':['R2_2','R3_12'],
+            'Product_of':['R1_0']},
+        {'_id':'C00004',
+            'Product_of':['R00004'],
+            'Reactant_in':['R3_12']}
+    ]
+    new_comps = add_MINE_rxns_to_KEGG_comps(comps, rxns)
+    assert len(exp_comps) == len(new_comps)
+    assert exp_comps == new_comps
+
+
+def enhance_KEGG_with_MINE(kegg_comp_dict, kegg_rxn_dict):
+    """Enhance a raw KEGG reaction network with MINE reactions."""
+    
+    return (kegg_comp_dict, kegg_rxn_dict)
 
 
 # Main code block
