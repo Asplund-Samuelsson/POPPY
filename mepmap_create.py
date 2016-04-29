@@ -1560,8 +1560,8 @@ def construct_network(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[])
     s_out("\nConstructing network...\n")
 
     # expand_start_comp_ids catches "unlisted" compounds with the same KEGG ID
-    start_comp_ids = expand_start_comp_ids(comp_dict, set(start_comp_ids), \
-    extra_kegg_ids=extra_kegg_ids)
+    start_comp_ids = expand_start_comp_ids(comp_dict, set(start_comp_ids),
+        extra_kegg_ids=extra_kegg_ids)
 
     # Initialise directed graph
     network = nx.DiGraph(mine_data={**comp_dict, **rxn_dict})
@@ -2668,7 +2668,7 @@ def remove_redundant_MINE_rxns(rxns):
             continue
 
         # Don't perform further comparisons for discarded reactions
-        if rp[0][0] in discarded_rxns:
+        if set([rp[0][0], rp[1][0]]).intersection(discarded_rxns):
             continue
 
         # Compare the Products and reactants
@@ -2714,13 +2714,17 @@ def remove_redundant_MINE_rxns(rxns):
 
             # Discard the reaction with most negative operators
             if ops1_neg < ops2_neg:
-                if rp[1][0] not in discarded_rxns:
-                    discarded_rxns.add(rp[1][0])
+                discarded_rxns.add(rp[1][0])
+
+            elif ops1_neg > ops2_neg:
+                discarded_rxns.add(rp[0][0])
 
             # Otherwise discard the second reaction
-            elif rp[0][0] < rp[1][0]:
-                if rp[1][0] not in discarded_rxns:
+            else:
+                if rp[0][0] < rp[1][0]:
                     discarded_rxns.add(rp[1][0])
+                else:
+                    discarded_rxns.add(rp[0][0])
 
     # Return reactions that were not discarded
     return [rxns[i] for i in range(len(rxns)) if i not in discarded_rxns]
@@ -2774,9 +2778,17 @@ def test_remove_redundant_MINE_rxns():
         {'_id':'R12', # Should be removed; reverse of R11 and third encountered
         'Operators':['1.2.-3.a', '4.5.6.-'],
         'Products':[[1,'C4']],
-        'Reactants':[[2,'C5'],[1,'X3']]}
+        'Reactants':[[2,'C5'],[1,'X3']]},
+        {'_id':'R13', # Should be removed; reverse of R14
+        'Operators':['2.8.-1.a'],
+        'Products':[[1,'C8'],[1,'X8']],
+        'Reactants':[[1,'C9'],[1,'X9']]},
+        {'_id':'R14', # Should remain
+        'Operators':['2.8.1.a'],
+        'Reactants':[[1,'C8'],[1,'X8']],
+        'Products':[[1,'C9'],[1,'X9']]},
     ]
-    exp_rxns = [rxns[0]] + rxns[2:6] + [rxns[7]] + [rxns[9]]
+    exp_rxns = [rxns[1]] + rxns[2:6] + [rxns[7]] + [rxns[9]] + [rxns[-1]]
     filtered_rxns = remove_redundant_MINE_rxns(rxns)
     for exp_rxn in exp_rxns:
         assert exp_rxn in filtered_rxns
@@ -3115,15 +3127,167 @@ def test_add_MINE_rxns_to_KEGG_comps():
     assert exp_comps == new_comps
 
 
-def enhance_KEGG_with_MINE(kegg_comp_dict, kegg_rxn_dict):
+def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
     """Enhance a raw KEGG reaction network with MINE reactions."""
-    
-    return (kegg_comp_dict, kegg_rxn_dict)
+
+    print("\nEnhancing KEGG reaction network data with MINE reactions...\n")
+
+    # Set up MINE connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    # Create a list of IDs for MINE compounds to download
+    MINE_comp_ids = list(KEGG_to_MINE_id(list(KEGG_comp_dict.keys())).values())
+
+    # Download the MINE compounds corresponding to KEGG IDs
+    print("Downloading MINE compounds...\n")
+    MINE_comps = threaded_getcomps(con, db, MINE_comp_ids)
+
+    # Create a list of IDs for MINE reactions to download
+    s_out("Identifying MINE reactions to download...")
+    MINE_rxn_ids = set()
+    for comp in MINE_comps:
+        MINE_rxn_ids = MINE_rxn_ids.union(set(extract_comp_reaction_ids(comp)))
+    s_out(" Done.\n")
+
+    # Download the MINE reactions listed for the MINE compounds
+    s_out("Downloading MINE reactions...\n")
+    MINE_rxns = threaded_getrxn(con, db, list(MINE_rxn_ids))
+
+    # Download the 'X' MINE compounds listed for the reactions
+    s_out("Identifying cofactors...")
+    MINE_X_comp_ids = set()
+    for rxn in MINE_rxns:
+        cids = set(extract_reaction_comp_ids(rxn))
+        for cid in cids:
+            if cid.startswith('X'):
+                MINE_X_comp_ids.add(cid)
+    s_out(" Done.\n")
+    s_out("Downloading MINE cofactors...\n")
+    MINE_comps = MINE_comps + threaded_getcomps(con, db, list(MINE_X_comp_ids))
+
+    # Create a SMILES to KEGG dictionary from the KEGG compound dictionary
+    s_out("Setting up SMILES to KEGG translation...")
+    SMILES_to_KEGG = create_SMILES_to_KEGG_dict(KEGG_comp_dict)
+    s_out(" Done.\n")
+
+    # Filter the MINE compounds for KEGG equivalents
+    s_out("Filtering MINE compounds...")
+    MINE_comps = filter(None, MINE_comps) # Remove None results
+    MINE_comps = MINE_comps_KEGG_filter(MINE_comps, SMILES_to_KEGG)
+    s_out(" Done.\n")
+
+    # Remove MINE reactions that have non-KEGG compounds
+    s_out("Filtering MINE reactions...")
+    MINE_rxns = remove_non_KEGG_MINE_rxns(MINE_rxns, MINE_comps)
+
+    # Remove redundant MINE reactions
+    MINE_rxns = remove_redundant_MINE_rxns(MINE_rxns)
+    s_out(" Done.\n")
+
+    # Create a list of MINE reactions in terms of KEGG compounds
+    s_out("Constructing MINE reactions with KEGG compound IDs...")
+    MINE_rxns = KEGG_rxns_from_MINE_rxns(MINE_rxns, MINE_comps)
+    s_out(" Done.\n")
+
+    # Add the new MINE reactions to the KEGG compounds
+    s_out("Updating raw KEGG reaction network data...")
+    KEGG_comps = list(KEGG_comp_dict.values())
+    KEGG_comps = add_MINE_rxns_to_KEGG_comps(KEGG_comps, MINE_rxns)
+
+    # Add the new MINE reactions to the KEGG reactions dictionary
+    KEGG_rxn_dict.update(dict([(rxn['_id'], rxn) for rxn in MINE_rxns]))
+
+    # Create a new KEGG compound dictionary
+    KEGG_comp_dict = dict([(comp['_id'], comp) for comp in KEGG_comps])
+    s_out(" Done.\n")
+
+    # Return the new KEGG compound dict. and the updated KEGG reaction dict.
+    return (KEGG_comp_dict, KEGG_rxn_dict)
+
+def test_enhance_KEGG_with_MINE():
+    # THE TESTING SYSTEM
+    # Compounds:
+    # C00001    H2O
+    # C00003    NAD+
+    # C00004    NADH
+    # C00011    CO2
+    # C00080    H+
+    # C01412    Butanal
+    # C02804    5-Hydroxypentanoate
+    # C06142    Butanol
+    #
+    # KEGG reaction R03544:
+    # DEFINITION  Butanal + NADH + H+ <=> 1-Butanol + NAD+
+    # EQUATION    C01412 + C00004 + C00080 <=> C06142 + C00003
+    #
+    # MINE reaction:
+    # DEFINITION  5-Hydroxypentanoate <=> 1-Butanol + CO2
+    # EQUATION    C02804 <=> C06142 + C00011
+
+    # Set up MINE connection
+    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    con = mc.mineDatabaseServices(server_url)
+    db = "KEGGexp2"
+
+    # Download KEGG data
+    KEGG_comp_ids = ['C00001', 'C00003', 'C00004', 'C00011',
+                     'C00080', 'C01412', 'C02804', 'C06142']
+    KEGG_rxn_ids = ['R03544']
+    KEGG_comp_dict, KEGG_rxn_dict = get_raw_KEGG(KEGG_comp_ids, KEGG_rxn_ids)
+
+    # This is the expected MINE data (butanol from butanal or hydroxypentanoate)
+    MINE_rxns = [
+    {'Rxn_Hash': '011bbc8f35061fb116cc4cbe46285b9db340031f3d3449f02ddf228666c686ac-5ef24b4a29298e80df3e410e68928b6e-b6560c09a82d56b15c28787b9dc1b017',
+    'Products': [[1, 'C01412'], [1, 'C00004'], [1, 'C00080']],
+    'Reactants': [[1, 'C06142'], [1, 'C00003']],
+    'RPair': {
+        'main': ('C06142_C01412', 'main'),
+        'cofac': ('C00003_C00004_C00080', 'cofac')},
+    'Operators': ['1.1.1.a'],
+    '_id': 'R86e63dd5a75dedff25511e9535e77e2316e4c7af_0'
+    },
+    {'Rxn_Hash': '1b67a3e6edc9cb29d69e8c21af86cf42129d566f728ff721bfd50914cbae3357-5ef24b4a29298e80df3e410e68928b6e-19772c3a68c961ee657f9e206e21bd88',
+    'Products': [[1, 'C06142'], [1, 'C00011']],
+    'Reactants': [[1, 'C02804']],
+    'RPair': {
+        'cofac': ('C00011', 'cofac'),
+        'main': ('C02804_C06142', 'main')},
+    'Operators': ['4.1.1.k'],
+    '_id': 'R766e3bcdbdf841f470c146b7ad9b74ca35d5c3e6_0'}
+    ]
+
+    # The expected KEGG reaction dictionary
+    exp_KEGG_rxn_dict = deepcopy(KEGG_rxn_dict)
+    exp_KEGG_rxn_dict[MINE_rxns[0]['_id']] = MINE_rxns[0]
+    exp_KEGG_rxn_dict[MINE_rxns[1]['_id']] = MINE_rxns[1]
+
+    # The expected KEGG compound dictionary
+    exp_KEGG_comp_dict = deepcopy(KEGG_comp_dict)
+
+    exp_KEGG_comp_dict['C06142']['Product_of'].append(MINE_rxns[1]['_id'])
+    exp_KEGG_comp_dict['C06142']['Reactant_in'] = [MINE_rxns[0]['_id']]
+
+    exp_KEGG_comp_dict['C01412']['Product_of'] = [MINE_rxns[0]['_id']]
+
+    exp_KEGG_comp_dict['C02804']['Reactant_in'] = [MINE_rxns[1]['_id']]
+
+    # Produce enhanced KEGG dictionaries
+    enh_KEGG_comp_dict, enh_KEGG_rxn_dict = enhance_KEGG_with_MINE(
+        KEGG_comp_dict, KEGG_rxn_dict
+    )
+
+    print([r['_id'] for r in enh_KEGG_rxn_dict.values()])
+
+    # Assert equality
+    assert exp_KEGG_comp_dict == enh_KEGG_comp_dict
+    assert exp_KEGG_rxn_dict == enh_KEGG_rxn_dict
 
 
 # Main code block
-def main(infile_name, mine, kegg, step_limit,
-    comp_limit, C_limit, outfile_name):
+def main(infile, mine, kegg, step_limit,
+    comp_limit, C_limit, enhance, outfile_name):
 
     # Exit if a database choice has not been specified
     if not mine and not kegg:
@@ -3135,21 +3299,22 @@ def main(infile_name, mine, kegg, step_limit,
         sys.exit(msg)
 
     # Get starting compounds
-    start_kegg_ids = read_compounds(infile_name)
+    if infile:
+        start_kegg_ids = read_compounds(infile)
+    else:
+        start_kegg_ids = []
 
     # Acquire raw KEGG dictionaries
     kegg_comp_dict = {} # Default
     kegg_rxn_dict = {} # Default
     if kegg:
-        raw_kegg = get_raw_KEGG()
-        kegg_comp_dict = raw_kegg[0]
-        kegg_rxn_dict = raw_kegg[1]
+        kegg_comp_dict, kegg_rxn_dict = get_raw_KEGG()
 
     # Acquire raw MINE dictionaries
     start_ids = [] # Default
     mine_comp_dict = {} # Default
     mine_rxn_dict = {} # Default
-    if mine:
+    if mine and not enhance:
         start_ids = list(set(KEGG_to_MINE_id(start_kegg_ids).values()))
         raw_mine = get_raw_MINE(start_ids, step_limit, comp_limit, C_limit)
         mine_comp_dict = raw_mine[0]
@@ -3159,20 +3324,27 @@ def main(infile_name, mine, kegg, step_limit,
     mine_comp_dict.update(kegg_comp_dict)
     mine_rxn_dict.update(kegg_rxn_dict)
 
+    # Perform KEGG enhancement
+    if not mine and kegg and enhance:
+        mine_comp_dict, mine_rxn_dict = enhance_KEGG_with_MINE(
+            mine_comp_dict, mine_rxn_dict
+        )
+
     # Create the network
     network = construct_network(mine_comp_dict, mine_rxn_dict,
     start_ids, extra_kegg_ids=start_kegg_ids)
 
     # Integrate KEGG with MINE
-    if mine and kegg:
+    if mine and kegg and not enhance:
         KEGG_MINE_integration(network)
 
     # Prune the network
-    s_out("\nPruning network...\n")
-    dummy = distance_to_origin(network, 2, -1)
-    prune_network(network)
-    s_out("\nDone.\n")
-    network_pruned = True
+    if not enhance:
+        s_out("\nPruning network...\n")
+        dummy = distance_to_origin(network, 2, -1)
+        prune_network(network)
+        s_out("\nDone.\n")
+        network_pruned = True
 
     # Prepare dictionaries
     s_out("\nPreparing compound dictionaries...")
@@ -3187,12 +3359,12 @@ if __name__ == "__main__":
     # Read arguments from the commandline
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        'infile',
-        help='Read KEGG compound identifiers from text file.'
-    )
-    parser.add_argument(
         'outfile',
         help='Write network to Python Pickle file.'
+    )
+    parser.add_argument(
+        '-i', '--infile',
+        help='Read KEGG compound identifiers from text file.'
     )
     parser.add_argument(
         '-M', '--mine', action='store_true',
@@ -3214,8 +3386,12 @@ if __name__ == "__main__":
         '-C', type=int, default=25,
         help='Maximum number of C atoms per MINE molecule.'
     )
+    parser.add_argument(
+        '-e', '--enhance', action='store_true',
+        help='Produce a KEGG network enhanced with MINE reactions.'
+    )
 
     args = parser.parse_args()
 
     main(args.infile, args.mine, args.kegg, args.r, \
-    args.c, args.C, args.outfile)
+    args.c, args.C, args.enhance, args.outfile)
