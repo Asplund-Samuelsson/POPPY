@@ -621,7 +621,7 @@ def subnetwork_from_paths(network, paths, target_node):
 
     # Cut connection to start compounds in order to
     # generate terminal (leaf) reactant nodes
-    generate_termini(subnet)
+    # generate_termini(subnet)
 
     # Reduce to the connected component
     subnet = subnet.subgraph(digraph_connected_component(subnet, target_node))
@@ -669,13 +669,15 @@ def test_subnetwork_from_paths():
     paths = generate_paths(G, 22, 4, n_procs=4)
     subnet = subnetwork_from_paths(G, paths, 22)
 
+    assert len(subnet.nodes()) == 33
+    assert len(subnet.edges()) == 36
     assert set(subnet.nodes()) == set([
         2,3,4,7,8,12,13,14,101,
         102,9,20,21,22,56,55,
-        47,54,53,46,45,39,38
+        47,54,53,46,45,39,38,
+        1,37,42,52,
+        44,43,48,49,40,41
     ])
-    assert len(subnet.nodes()) == 23
-    assert len(subnet.edges()) == 23
 
 
 def format_graphml(network, subnet):
@@ -711,7 +713,7 @@ def format_graphml(network, subnet):
                 except KeyError:
                     common_name = network.graph['mine_data'][mid]['Formula']
                 c_names.append(common_name)
-            subnet.node[node]['c_names'] = " + ".join(c_names)
+            subnet.node[node]['common_name'] = " + ".join(c_names)
 
     # Copy and remove the incompatible stuff from nodes and graph
     outnet = subnet.copy()
@@ -1057,27 +1059,26 @@ def main(infile_name, compound, exact_comp_id, reaction_limit,
     s_out(" Done.\n")
 
     # Pathway enumeration
-    if compound:
-        if not exact_comp_id:
-            target_node = parse_compound(compound, network)
-        else:
-            try:
-                target_node = network.graph['cmid2node'][compound]
-            except KeyError:
-                target_node = None
+    if not exact_comp_id:
+        target_node = parse_compound(compound, network)
+    else:
+        try:
+            target_node = network.graph['cmid2node'][compound]
+        except KeyError:
+            target_node = None
 
-        if target_node == None:
-            sys.exit("Error: Target node was not found. Check compound '" + \
-            compound + "'.\n")
-        paths = generate_paths(network, target_node, reaction_limit, n_procs)
+    if target_node == None:
+        sys.exit("Error: Target node was not found. Check compound '" + \
+        compound + "'.\n")
+    paths = generate_paths(network, target_node, reaction_limit, n_procs)
 
-        # Save sub-network graphml
-        if sub_network_out:
-            subnet = subnetwork_from_paths(network, paths, target_node)
-            s_out("\nWriting sub-network to graphml...")
-            subnet = format_graphml(network, subnet)
-            nx.write_graphml(subnet, sub_network_out)
-            s_out(" Done.\n")
+    # Save sub-network graphml
+    if sub_network_out:
+        subnet = subnetwork_from_paths(network, paths, target_node)
+        s_out("\nWriting sub-network to graphml...")
+        subnet = format_graphml(network, subnet)
+        nx.write_graphml(subnet, sub_network_out)
+        s_out(" Done.\n")
 
     # Save results
     if outfile_name:
@@ -1094,16 +1095,16 @@ if __name__ == "__main__":
         help='Read mepmap network pickle.'
     )
     parser.add_argument(
+        'compound', type=str, default=False,
+        help='Target compound.'
+    )
+    parser.add_argument(
         '-o', '--outfile', type=str, default=False,
         help='Save identified pathways in pickle.'
     )
     parser.add_argument(
         '-s', '--sub_network', type=str, default=False,
         help='Save sub-network as graphml (requires -c).'
-    )
-    parser.add_argument(
-        '-c', '--compound', type=str, default=False,
-        help='Target compound.'
     )
     parser.add_argument(
         '-e', '--exact_comp_id', action='store_true',

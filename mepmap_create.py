@@ -12,7 +12,7 @@ import threading
 from requests import get as rget
 from rdkit import Chem
 from copy import deepcopy
-from itertools import repeat
+from itertools import repeat, product
 
 # Import scripts
 import mineclient3 as mc
@@ -2537,17 +2537,512 @@ def test_prepare_dictionaries():
     assert G.graph['name2nodes'] == expected_name2nodes
 
 
+def create_SMILES_to_KEGG_dict(KEGG_dict):
+    """Create a dictionary for translating SMILES to KEGG IDs."""
+    SMILES_to_KEGG = {}
+    for KEGG_id in KEGG_dict.keys():
+        KEGG_comp = KEGG_dict[KEGG_id]
+        try:
+            SMILES = KEGG_comp['SMILES']
+        except KeyError:
+            continue
+        try:
+            SMILES_to_KEGG[SMILES].add(KEGG_id)
+        except KeyError:
+            SMILES_to_KEGG[SMILES] = {KEGG_id}
+    return SMILES_to_KEGG
+
+def test_create_SMILES_to_KEGG_dict():
+    KEGG_dict = {
+        'C80000':{'SMILES':'OCC1OC(O)C(O)C(O)C1O'},
+        'C80001':{'SMILES':'CCO'},
+        'C80002':{'SMILES':'CCO'},
+        'C80003':{'_id':'C80002'}
+    }
+    exp_SMILES_to_KEGG = {
+        'OCC1OC(O)C(O)C(O)C1O':{'C80000'},
+        'CCO':{'C80001', 'C80002'}
+    }
+    assert exp_SMILES_to_KEGG == create_SMILES_to_KEGG_dict(KEGG_dict)
+
+
+def MINE_comps_KEGG_filter(comps, SMILES_to_KEGG):
+    """Remove compounds that have no or cannot be assigned a KEGG ID."""
+    comps_filtered = []
+    for comp in comps:
+        try:
+            KEGG_ids = comp['DB_links']['KEGG']
+        except KeyError:
+            KEGG_ids = []
+        try:
+            SMILES = comp['SMILES']
+        except KeyError:
+            SMILES = ''
+        if KEGG_ids:
+            comps_filtered.append(comp)
+            continue
+        if SMILES in SMILES_to_KEGG.keys():
+            KEGG_ids = sorted(list(SMILES_to_KEGG[SMILES]))
+            try:
+                comp['DB_links']['KEGG'] = KEGG_ids
+            except KeyError:
+                comp['DB_links'] = {'KEGG' : KEGG_ids}
+            comps_filtered.append(comp)
+    return comps_filtered
+
+def test_MINE_comps_KEGG_filter():
+    comps = [
+        {'_id':'C1', # Should be kept
+        'DB_links':{'KEGG':['C00001']},
+        'Reactant_in':['R1','R2'],
+        'Product_of':['R3','R4'],
+        'SMILES':'O=CO'},
+        {'_id':'C2', # Should be kept
+        'DB_links':{'KEGG':['C00002', 'C00003']},
+        'Reactant_in':['R4'],
+        'SMILES':'CCCOC'},
+        {'_id':'C3', # Should be kept (via SMILES_to_KEGG)
+        'DB_links':{'CUD':['CUD_5']},
+        'Reactant_in':['R5'],
+        'Product_of':['R6', 'R7'],
+        'SMILES':'CC(N)OC'},
+        {'_id':'C4', # Should be kept (via SMILES_to_KEGG)
+        'SMILES':'C(C)C=(O)OP=([O])(O)[O-]'},
+        {'_id':'C5', # Should be removed
+        'Product_of':['R9']},
+        {'_id':'C6', # Should be removed
+        'DB_links':{'CUD':['CUD_8']},
+        'Product_of':['R10']}
+    ]
+    SMILES_to_KEGG = {
+        'CC(N)OC' : {'C00004'},
+        'C(C)C=(O)OP=([O])(O)[O-]' : {'C00005', 'C00006'}
+    }
+    exp_comps = comps[:4]
+    exp_comps[2]['DB_links'] = {'CUD':['CUD_5'], 'KEGG':['C00004']}
+    exp_comps[3]['DB_links'] = {'KEGG':['C00005','C00006']}
+    assert MINE_comps_KEGG_filter(comps, SMILES_to_KEGG) == exp_comps
+
+def operators_identical(op1, op2):
+    """Checks if two BNICE EC operators are eachother's reverse/identical."""
+    for e1, e2 in zip(op1.split('.'), op2.split('.')):
+        if e1.lstrip('-') != e2.lstrip('-'):
+            return False
+    return True
+
+def test_operators_identical():
+    assert operators_identical('1.1.1.-', '1.1.1.-')
+    assert operators_identical('2.42.1.a', '2.42.-1.a')
+    assert not operators_identical('1.2.3.-', '1.2.4.-')
+
+
+def extract_ints(str_list):
+    int_list = []
+    for s in str_list:
+        try:
+            int_list.append(int(s))
+        except ValueError:
+            continue
+    return int_list
+
+def test_extract_ints():
+    L1 = ['1','2','23','c']
+    L2 = ['4','42','-1','-']
+    L3 = ['1','1','1','22']
+    assert extract_ints(L1) == [1,2,23]
+    assert extract_ints(L2) == [4,42,-1]
+    assert extract_ints(L3) == [1,1,1,22]
+
+
+def remove_redundant_MINE_rxns(rxns):
+    """Removes identical but reversed MINE reactions."""
+
+    discarded_rxns = set()
+
+    # Iterate over all reaction pairs
+    for rp in product(enumerate(rxns), enumerate(rxns)):
+
+        # Don't compare a reaction to itself
+        if rp[0][0] == rp[1][0]:
+            continue
+
+        # Don't perform further comparisons for discarded reactions
+        if rp[0][0] in discarded_rxns:
+            continue
+
+        # Compare the Products and reactants
+        try:
+            r1p = set([tuple(c) for c in rp[0][1]['Products']])
+        except KeyError:
+            r1p = set()
+        try:
+            r2p = set([tuple(c) for c in rp[1][1]['Products']])
+        except KeyError:
+            r2p = set()
+        try:
+            r1r = set([tuple(c) for c in rp[0][1]['Reactants']])
+        except KeyError:
+            r1r = set()
+        try:
+            r2r = set([tuple(c) for c in rp[1][1]['Reactants']])
+        except KeyError:
+            r2r = set()
+
+        if r1p == r2r and r2p == r1r:
+            are_mutual_reverse = True
+        else:
+            are_mutual_reverse = False
+
+        # Compare the sets of operators
+        ops1 = rp[0][1]['Operators']
+        ops2 = rp[1][1]['Operators']
+        n_identical = 0
+        for op_pair in product(ops1, ops2):
+            if operators_identical(*op_pair):
+                n_identical += 1
+
+        # If the reactions have the same operators and are eachothers reverse,
+        # determine which one to discard
+        if n_identical == len(ops1) == len(ops2) and are_mutual_reverse:
+
+            # One reaction needs to be discarded; Find which one to keep
+            ops1_int = (extract_ints(op.split('.')) for op in ops1)
+            ops2_int = (extract_ints(op.split('.')) for op in ops2)
+            ops1_neg = sum(any(x < 0 for x in op) for op in ops1_int)
+            ops2_neg = sum(any(x < 0 for x in op) for op in ops2_int)
+
+            # Discard the reaction with most negative operators
+            if ops1_neg < ops2_neg:
+                if rp[1][0] not in discarded_rxns:
+                    discarded_rxns.add(rp[1][0])
+
+            # Otherwise discard the second reaction
+            elif rp[0][0] < rp[1][0]:
+                if rp[1][0] not in discarded_rxns:
+                    discarded_rxns.add(rp[1][0])
+
+    # Return reactions that were not discarded
+    return [rxns[i] for i in range(len(rxns)) if i not in discarded_rxns]
+
+def test_remove_redundant_MINE_rxns():
+    rxns = [
+        {'_id':'R1', # Should be removed; reverse of R2
+        'Operators':['2.7.-1.a'],
+        'Products':[[1,'C1'],[1,'X1']],
+        'Reactants':[[1,'X2'],[1,'C2']]},
+        {'_id':'R2', # Should remain
+        'Operators':['2.7.1.a'],
+        'Reactants':[[1,'C1'],[1,'X1']],
+        'Products':[[1,'C2'],[1,'X2']]},
+        {'_id':'R3', # Should remain; different Reactants
+        'Operators':['2.7.1.a'],
+        'Reactants':[[1,'C3'],[1,'X1']],
+        'Products':[[1,'C2'],[1,'X2']]},
+        {'_id':'R4', # Should remain; different Operators
+        'Operators':['3.12.2.-'],
+        'Reactants':[[1,'C1'],[1,'X1']],
+        'Products':[[1,'C2'],[1,'X2']]},
+        {'_id':'R5', # Should remain; different Operators
+        'Operators':['2.7.-1.a', '4.1.1.g2'],
+        'Products':[[1,'C1'],[1,'X1']],
+        'Reactants':[[1,'C2'],[1,'X2']]},
+        {'_id':'R6', # Should remain
+        'Operators':['1.1.1.a', '2.2.2.-'],
+        'Reactants':[[1,'C4']],
+        'Products':[[2,'C5'],[1,'X3']]},
+        {'_id':'R7', # Should be removed; reverse of R6
+        'Operators':['2.2.-2.-', '1.1.-1.a'],
+        'Products':[[1,'C4']],
+        'Reactants':[[2,'C5'],[1,'X3']]},
+        {'_id':'R8', # Should remain
+        'Operators':['1.1.1.a', '2.2.2.-', '3.3.-3.g'],
+        'Reactants':[[1,'C4']],
+        'Products':[[2,'C5'],[1,'X4']]},
+        {'_id':'R9', # Should be removed; reverse of R8 and most 'negative' ops.
+        'Operators':['2.2.-2.-', '1.1.-1.a', '3.3.3.g'],
+        'Products':[[1,'C4']],
+        'Reactants':[[2,'C5'],[1,'X4']]},
+        {'_id':'R10', # Should remain
+        'Operators':['1.2.3.a', '4.5.-6.-'],
+        'Reactants':[[1,'C4']],
+        'Products':[[2,'C5'],[1,'X3']]},
+        {'_id':'R11', # Should be removed; reverse of R11 and second encountered
+        'Operators':['1.2.-3.a', '4.5.6.-'],
+        'Products':[[1,'C4']],
+        'Reactants':[[2,'C5'],[1,'X3']]},
+        {'_id':'R12', # Should be removed; reverse of R11 and third encountered
+        'Operators':['1.2.-3.a', '4.5.6.-'],
+        'Products':[[1,'C4']],
+        'Reactants':[[2,'C5'],[1,'X3']]}
+    ]
+    exp_rxns = [rxns[0]] + rxns[2:6] + [rxns[7]] + [rxns[9]]
+    filtered_rxns = remove_redundant_MINE_rxns(rxns)
+    for exp_rxn in exp_rxns:
+        assert exp_rxn in filtered_rxns
+    for rxn in filtered_rxns:
+        assert rxn in exp_rxns
+    assert exp_rxns == filtered_rxns
+
+
+def remove_non_KEGG_MINE_rxns(rxns, comps):
+    """Return reactions with only KEGG compounds."""
+    filtered_rxns = []
+    allowed_ids = set([c['_id'] for c in comps])
+    for rxn in rxns:
+        if set(extract_reaction_comp_ids(rxn)).issubset(allowed_ids):
+            filtered_rxns.append(rxn)
+    return filtered_rxns
+
+def test_remove_non_KEGG_MINE_rxns():
+    rxns = [
+        {'_id':'R1', # All KEGG; keep
+        'Reactants':[[1,'C1'],[1,'C2']],
+        'Products':[[1,'C3'],[1,'C4']]},
+        {'_id':'R2', # One non-KEGG reactant; remove
+        'Reactants':[[1,'C5'],[1,'X1']],
+        'Products':[[1,'X2'],[2,'C1']]},
+        {'_id':'R3', # One non-KEGG product; remove
+        'Reactants':[[1,'C3'],[1,'X3']],
+        'Products':[[1,'X4'],[2,'C6']]},
+        {'_id':'R4', # All non-KEGG; remove
+        'Reactants':[[1,'C8'],[1,'X8']],
+        'Products':[[1,'X9'],[1,'C9']]},
+        {'_id':'R5', # All KEGG; keep
+        'Reactants':[[1,'C3'],[1,'C2']],
+        'Products':[[1,'C3'],[1,'X2']]},
+        {'_id':'R6', # All KEGG; keep
+        'Reactants':[[2,'C1']],
+        'Products':[[1,'X4'],[1,'C2']]}
+    ]
+    comps = [
+        {'_id':'C1'}, {'_id':'C2'}, {'_id':'C3'}, {'_id':'C4'},
+        {'_id':'X1'}, {'_id':'X2'}, {'_id':'X3'}, {'_id':'X4'},
+    ]
+    assert remove_non_KEGG_MINE_rxns(rxns, comps) == [rxns[0]] + rxns[4:]
+
+
+def KEGG_rxns_from_MINE_rxns(rxns, comps):
+    """Produce reactions with KEGG IDs instead of MINE IDs."""
+
+    # Set up a MINE ID to KEGG ID dictionary
+    M2K = dict([(c['_id'], c['DB_links']['KEGG']) for c in comps])
+
+    # Set up a MINE ID to Cofactor status dictionary
+    def is_not_connected(comp):
+        if set(['Reactant_in','Product_of']).intersection(comp.keys()):
+            return False
+        else:
+            return True
+
+    is_cof = dict([(c['_id'], is_not_connected(c)) for c in comps])
+
+    # Produce KEGG-labeled reactions
+    KEGG_rxns = []
+    for rxn in rxns:
+
+        # Determine positions of cofactors
+        r_cofacs = []
+        for e in enumerate([is_cof[c[1]] for c in rxn['Reactants']]):
+            if e[1]:
+                r_cofacs.append(e[0])
+        p_cofacs = []
+        for e in enumerate([is_cof[c[1]] for c in rxn['Products']]):
+            if e[1]:
+                p_cofacs.append(e[0])
+
+        # Create combinations of KEGG IDs
+        r_combos = product(*[M2K[c[1]] for c in rxn['Reactants']])
+        p_combos = product(*[M2K[c[1]] for c in rxn['Products']])
+        r_coeffs = [c[0] for c in rxn['Reactants']]
+        p_coeffs = [c[0] for c in rxn['Products']]
+        rp_pairs = product(r_combos, p_combos)
+
+        # Iterate over the new reactant/product pairs and produce reactions
+        n = 0
+
+        for rp_pair in rp_pairs:
+
+            # Create a copy of the old reaction
+            new_rxn = deepcopy(rxn)
+
+            # Add an index to the end of the ID
+            new_rxn['_id'] = rxn['_id'] + '_' + str(n)
+
+            # Update Reactants
+            new_rxn['Reactants'] = [list(i) for i in zip(r_coeffs, rp_pair[0])]
+
+            # Update Products
+            new_rxn['Products'] = [list(i) for i in zip(p_coeffs, rp_pair[1])]
+
+            # Create RPair dictionary
+            rp_dict = {}
+
+            # Define a function for building up the RPair entries
+            def build_RPair_dict(rp_dict, en_comp, cof_indices):
+                # The compound could be a cofactor...
+                if en_comp[0] in cof_indices:
+                    try:
+                        entry = rp_dict['cofac'][0] + '_' + en_comp[1]
+                        rp_dict['cofac'][0] = entry
+                    except KeyError:
+                        rp_dict['cofac'] = [en_comp[1], 'cofac']
+
+                # ...or a main participant
+                else:
+                    try:
+                        entry = rp_dict['main'][0] + '_' + en_comp[1]
+                        rp_dict['main'][0] = entry
+                    except KeyError:
+                        rp_dict['main'] = [en_comp[1], 'main']
+
+                # Return the expanded RPair dictionary
+                return rp_dict
+
+            # Build up RPair entries with reactants
+            for en_r in enumerate(rp_pair[0]):
+                build_RPair_dict(rp_dict, en_r, r_cofacs)
+
+            # Build up RPair entries with products
+            for en_p in enumerate(rp_pair[1]):
+                build_RPair_dict(rp_dict, en_p, p_cofacs)
+
+            # Convert to tuples
+            for item in rp_dict.items():
+                rp_dict[item[0]] = tuple(item[1])
+
+            # Add the RPair entries to the reaction
+            new_rxn['RPair'] = rp_dict
+
+            # Finally, add the reaction to the list of new reactions
+            KEGG_rxns.append(new_rxn)
+
+            # ...and count one step up
+            n += 1
+
+    return KEGG_rxns
+
+def test_KEGG_rxns_from_MINE_rxns():
+    rxns = [
+        {'_id':'R1', 'Operators':['1.1.1.a'],
+        'Reactants':[[1,'C1'],[1,'C2']],
+        'Products':[[1,'C3'],[1,'C4']]},
+        {'_id':'R5', 'Operators':['1.2.1.a'],
+        'Reactants':[[1,'X3'],[1,'C2']],
+        'Products':[[1,'C3'],[1,'X2']]},
+        {'_id':'R6', 'Operators':['1.3.1.a'],
+        'Reactants':[[2,'C1'],[1,'X1']],
+        'Products':[[1,'X4'],[1,'C2']]},
+        {'_id':'R9', 'Operators':['1.1.4.a', '3.4.2.-'],
+        'Reactants':[[1,'C2']],
+        'Products':[[1,'C4']]}
+    ]
+    comps = [
+        {'_id':'C1', 'DB_links':{'KEGG':['C10000','C10001']},
+        'Reactant_in':['R1','R6']},
+        {'_id':'C2', 'DB_links':{'KEGG':['C20000']},
+        'Reactant_in':['R1','R5','R9'], 'Product_of':['R6']},
+        {'_id':'C3', 'DB_links':{'KEGG':['C30000','C30001']},
+        'Product_of':['R1','R5']},
+        {'_id':'C4', 'DB_links':{'KEGG':['C40000']},
+        'Product_of':['R1','R9']},
+        {'_id':'X1', 'DB_links':{'KEGG':['C10000']}},
+        {'_id':'X2', 'DB_links':{'KEGG':['C00002']}},
+        {'_id':'X3', 'DB_links':{'KEGG':['C00003']}},
+        {'_id':'X4', 'DB_links':{'KEGG':['C40000','C40001']}},
+    ]
+    exp_rxns = [
+        {'_id':'R1_0', 'Operators':['1.1.1.a'],
+        'Reactants':[[1,'C10000'],[1,'C20000']],
+        'Products':[[1,'C30000'],[1,'C40000']],
+        'RPair':{
+            'main':('C10000_C20000_C30000_C40000','main')
+        }},
+        {'_id':'R1_1', 'Operators':['1.1.1.a'],
+        'Reactants':[[1,'C10000'],[1,'C20000']],
+        'Products':[[1,'C30001'],[1,'C40000']],
+        'RPair':{
+            'main':('C10000_C20000_C30001_C40000','main')
+        }},
+        {'_id':'R1_2', 'Operators':['1.1.1.a'],
+        'Reactants':[[1,'C10001'],[1,'C20000']],
+        'Products':[[1,'C30000'],[1,'C40000']],
+        'RPair':{
+            'main':('C10001_C20000_C30000_C40000','main')
+        }},
+        {'_id':'R1_3', 'Operators':['1.1.1.a'],
+        'Reactants':[[1,'C10001'],[1,'C20000']],
+        'Products':[[1,'C30001'],[1,'C40000']],
+        'RPair':{
+            'main':('C10001_C20000_C30001_C40000','main')
+        }},
+        {'_id':'R5_0', 'Operators':['1.2.1.a'],
+        'Reactants':[[1,'C00003'],[1,'C20000']],
+        'Products':[[1,'C30000'],[1,'C00002']],
+        'RPair':{
+            'main':('C20000_C30000','main'),
+            'cofac':('C00003_C00002', 'cofac')
+        }},
+        {'_id':'R5_1', 'Operators':['1.2.1.a'],
+        'Reactants':[[1,'C00003'],[1,'C20000']],
+        'Products':[[1,'C30001'],[1,'C00002']],
+        'RPair':{
+            'main':('C20000_C30001','main'),
+            'cofac':('C00003_C00002', 'cofac')
+        }},
+        {'_id':'R6_0', 'Operators':['1.3.1.a'],
+        'Reactants':[[2,'C10000'],[1,'C10000']],
+        'Products':[[1,'C40000'],[1,'C20000']],
+        'RPair':{
+            'main':('C10000_C20000','main'),
+            'cofac':('C10000_C40000', 'cofac')
+        }},
+        {'_id':'R6_1', 'Operators':['1.3.1.a'],
+        'Reactants':[[2,'C10000'],[1,'C10000']],
+        'Products':[[1,'C40001'],[1,'C20000']],
+        'RPair':{
+            'main':('C10000_C20000','main'),
+            'cofac':('C10000_C40001', 'cofac')
+        }},
+        {'_id':'R6_2', 'Operators':['1.3.1.a'],
+        'Reactants':[[2,'C10001'],[1,'C10000']],
+        'Products':[[1,'C40000'],[1,'C20000']],
+        'RPair':{
+            'main':('C10001_C20000','main'),
+            'cofac':('C10000_C40000', 'cofac')
+        }},
+        {'_id':'R6_3', 'Operators':['1.3.1.a'],
+        'Reactants':[[2,'C10001'],[1,'C10000']],
+        'Products':[[1,'C40001'],[1,'C20000']],
+        'RPair':{
+            'main':('C10001_C20000','main'),
+            'cofac':('C10000_C40001', 'cofac')
+        }},
+        {'_id':'R9_0', 'Operators':['1.1.4.a', '3.4.2.-'],
+        'Reactants':[[1,'C20000']],
+        'Products':[[1,'C40000']],
+        'RPair':{
+            'main':('C20000_C40000','main')
+        }}
+    ]
+    new_rxns = KEGG_rxns_from_MINE_rxns(rxns, comps)
+    assert len(exp_rxns) == len(new_rxns)
+    assert exp_rxns == new_rxns
+
+
+
+
+
 # Main code block
 def main(infile_name, mine, kegg, step_limit,
     comp_limit, C_limit, outfile_name):
 
     # Exit if a database choice has not been specified
     if not mine and not kegg:
-        msg = "\n".join([
-            "\nPlease choose one or more databases for network construction:",
-            "-M, --mine for MINE",
-            "-K, --kegg for KEGG\n"
-        ])
+        msg = (
+        "\nPlease choose one or more databases for network construction:\n" +
+        "-M, --mine for MINE\n" +
+        "-K, --kegg for KEGG\n"
+        )
         sys.exit(msg)
 
     # Get starting compounds
@@ -2576,7 +3071,7 @@ def main(infile_name, mine, kegg, step_limit,
     mine_rxn_dict.update(kegg_rxn_dict)
 
     # Create the network
-    network = construct_network(mine_comp_dict, mine_rxn_dict, \
+    network = construct_network(mine_comp_dict, mine_rxn_dict,
     start_ids, extra_kegg_ids=start_kegg_ids)
 
     # Integrate KEGG with MINE
