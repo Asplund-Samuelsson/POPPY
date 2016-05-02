@@ -11,6 +11,7 @@ from rdkit import Chem
 
 # Import scripts
 from mepmap_helpers import *
+from progress import Progress
 
 # Define functions
 def get_KEGG_text(kegg_id, krest="http://rest.kegg.jp"):
@@ -399,7 +400,6 @@ def get_KEGG_comps(comp_id_list, num_workers=128):
             if comp_id is None:
                 work.task_done()
                 break
-            s_out("\rHandling compound query '%s'." % str(comp_id))
             kegg_text = get_KEGG_text(comp_id)
             if not kegg_text is None:
                 kegg_comp = format_KEGG_compound(kegg_text)
@@ -419,6 +419,20 @@ def get_KEGG_comps(comp_id_list, num_workers=128):
 
     for comp_id in comp_id_list:
         work.put(comp_id)
+
+    # Report progress
+    M = len(comp_id_list)
+    p = Progress(design='pbct', max_val=M)
+    while True:
+        if not work.qsize():
+            n = M - work.qsize()
+            p.write(n)
+            break
+        else:
+            n = M - work.qsize()
+            p.write(n)
+            time.sleep(1)
+    print("")
 
     # Block until all work is done
     work.join()
@@ -461,7 +475,6 @@ def get_KEGG_rxns(rxn_id_list, num_workers=128):
             if rxn_id is None:
                 work.task_done()
                 break
-            s_out("\rHandling reaction query '%s'." % str(rxn_id))
             kegg_text = get_KEGG_text(rxn_id)
             if not kegg_text is None:
                 kegg_rxn = format_KEGG_reaction(kegg_text)
@@ -481,6 +494,20 @@ def get_KEGG_rxns(rxn_id_list, num_workers=128):
 
     for rxn_id in rxn_id_list:
         work.put(rxn_id)
+
+    # Report progress
+    M = len(rxn_id_list)
+    p = Progress(design='pbct', max_val=M)
+    while True:
+        if not work.qsize():
+            n = M - work.qsize()
+            p.write(n)
+            break
+        else:
+            n = M - work.qsize()
+            p.write(n)
+            time.sleep(1)
+    print("")
 
     # Block until all work is done
     work.join()

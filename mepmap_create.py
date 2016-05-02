@@ -19,6 +19,7 @@ import mineclient3 as mc
 from mepmap_helpers import *
 from mepmap_origin_helpers import *
 from mepmap_KEGG_helpers import *
+from progress import Progress
 
 # Define functions
 def allow_reaction_listing(kegg_comp, kegg_rxn):
@@ -252,6 +253,7 @@ def get_raw_KEGG(kegg_comp_ids=[], kegg_rxn_ids=[], krest="http://rest.kegg.jp",
 
     # Download compounds (threaded)
     kegg_comp_dict = {}
+    print("Downloading KEGG compounds...")
     for comp in get_KEGG_comps(kegg_comp_ids):
         if comp == None:
             continue
@@ -266,6 +268,7 @@ def get_raw_KEGG(kegg_comp_ids=[], kegg_rxn_ids=[], krest="http://rest.kegg.jp",
 
     # Download reactions (threaded)
     kegg_rxn_dict = {}
+    print("Downloading KEGG reactions...")
     for rxn in get_KEGG_rxns(kegg_rxn_ids):
         if rxn == None:
             continue
@@ -400,7 +403,6 @@ def threaded_quicksearch(con, db, query_list):
             if query is None:
                 work.task_done()
                 break
-            s_out("\rHandling quick query '%s'." % str(query))
             output.put(quicksearch(con, db, query))
             work.task_done()
 
@@ -417,6 +419,20 @@ def threaded_quicksearch(con, db, query_list):
 
     for query in query_list:
         work.put(query)
+
+    # Report progress
+    M = len(query_list)
+    p = Progress(design='pbct', max_val=M)
+    while True:
+        if not work.qsize():
+            n = M - work.qsize()
+            p.write(n)
+            break
+        else:
+            n = M - work.qsize()
+            p.write(n)
+            time.sleep(1)
+    print("")
 
     # Block until all work is done
     work.join()
@@ -506,7 +522,6 @@ def threaded_getcomps(con, db, comp_id_list):
             if comp_id is None:
                 work.task_done()
                 break
-            s_out("\rHandling compound query '%s'." % str(comp_id))
             output.put(getcomp(con, db, comp_id))
             work.task_done()
 
@@ -523,6 +538,20 @@ def threaded_getcomps(con, db, comp_id_list):
 
     for comp_id in comp_id_list:
         work.put(comp_id)
+
+    # Report progress
+    M = len(comp_id_list)
+    p = Progress(design='pbct', max_val=M)
+    while True:
+        if not work.qsize():
+            n = M - work.qsize()
+            p.write(n)
+            break
+        else:
+            n = M - work.qsize()
+            p.write(n)
+            time.sleep(1)
+    print("")
 
     # Block until all work is done
     work.join()
@@ -627,7 +656,6 @@ def threaded_getrxn(con, db, rxn_id_list):
             if rxn_id is None:
                 work.task_done()
                 break
-            s_out("\rHandling reaction query '%s'." % str(rxn_id))
             output.put(getrxn(con, db, rxn_id))
             work.task_done()
 
@@ -644,6 +672,20 @@ def threaded_getrxn(con, db, rxn_id_list):
 
     for rxn_id in rxn_id_list:
         work.put(rxn_id)
+
+    # Report progress
+    M = len(rxn_id_list)
+    p = Progress(design='pbct', max_val=M)
+    while True:
+        if not work.qsize():
+            n = M - work.qsize()
+            p.write(n)
+            break
+        else:
+            n = M - work.qsize()
+            p.write(n)
+            time.sleep(1)
+    print("")
 
     # Block until all work is done
     work.join()
@@ -1567,24 +1609,24 @@ def construct_network(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[])
     network = nx.DiGraph(mine_data={**comp_dict, **rxn_dict})
 
     # Add all compounds
-    n_comp = len(comp_dict)
+    p = Progress(max_val=len(comp_dict), design='pct')
     n_done = 0
     for comp_id in sorted(comp_dict.keys()):
         comp = comp_dict[comp_id]
         network = add_compound_node(network, comp, start_comp_ids)
-        progress = float(100*n_done/n_comp)
-        s_out("\rAdding compounds... %0.1f%%" % progress)
+        progress = p.to_string(n_done)
+        s_out("\rAdding compounds... %s" % progress)
         n_done += 1
 
     # Add all reactions
     print("")
-    n_rxn = len(rxn_dict)
+    p = Progress(max_val=len(rxn_dict), design='pct')
     n_done = 0
     for rxn_id in sorted(rxn_dict.keys()):
         rxn = rxn_dict[rxn_id]
         network = add_quad_reaction_node(network, rxn)
-        progress = float(100*n_done/n_rxn)
-        s_out("\rAdding reactions... %0.1f%%" % progress)
+        progress = p.to_string(n_done)
+        s_out("\rAdding reactions... %s" % progress)
         n_done += 1
 
     print("\nDone.")
@@ -2660,8 +2702,15 @@ def remove_redundant_MINE_rxns(rxns):
 
     discarded_rxns = set()
 
+    # Set up progress indicator
+    p = Progress(max_val = len(rxns)**2, design='pt')
+    n = 0
+
     # Iterate over all reaction pairs
     for rp in product(enumerate(rxns), enumerate(rxns)):
+        # Report progress
+        n += 1
+        s_out("\rRemoving redundant MINE reactions... %s" % p.to_string(n))
 
         # Don't compare a reaction to itself
         if rp[0][0] == rp[1][0]:
@@ -2727,6 +2776,7 @@ def remove_redundant_MINE_rxns(rxns):
                     discarded_rxns.add(rp[0][0])
 
     # Return reactions that were not discarded
+    print("")
     return [rxns[i] for i in range(len(rxns)) if i not in discarded_rxns]
 
 def test_remove_redundant_MINE_rxns():
@@ -2801,9 +2851,14 @@ def remove_non_KEGG_MINE_rxns(rxns, comps):
     """Return reactions with only KEGG compounds."""
     filtered_rxns = []
     allowed_ids = set([c['_id'] for c in comps])
+    p = Progress(max_val = len(rxns), design = 'p')
+    n = 0
     for rxn in rxns:
+        n += 1
+        s_out("\rRemoving non-KEGG MINE reactions... %s" % p.to_string(n))
         if set(extract_reaction_comp_ids(rxn)).issubset(allowed_ids):
             filtered_rxns.append(rxn)
+    print("")
     return filtered_rxns
 
 def test_remove_non_KEGG_MINE_rxns():
@@ -2851,7 +2906,12 @@ def KEGG_rxns_from_MINE_rxns(rxns, comps):
 
     # Produce KEGG-labeled reactions
     KEGG_rxns = []
+    p = Progress(max_val=len(rxns), design='pt')
+    n = 0
     for rxn in rxns:
+        # Report progress
+        n += 1
+        s_out("\rProducing MINE reactions with KEGG IDs... %s" % p.to_string(n))
 
         # Determine positions of cofactors
         r_cofacs = []
@@ -3049,7 +3109,12 @@ def add_MINE_rxns_to_KEGG_comps(comps, rxns):
     new_comps = []
 
     # Iterate over the KEGG compounds
+    p = Progress(max_val=len(comps), design='pt')
+    n = 0
     for comp in comps:
+        # Report progress
+        n += 1
+        s_out("\rAdding MINE reactions to KEGG compounds... %s" % p.to_string(n))
 
         # Initialize a new compound
         new_comp = deepcopy(comp)
@@ -3137,19 +3202,30 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
+    # Create a list of KEGG compound IDs
+    KEGG_comp_ids = list(KEGG_comp_dict.keys())
+
     # Create a list of IDs for MINE compounds to download
-    MINE_comp_ids = list(KEGG_to_MINE_id(list(KEGG_comp_dict.keys())).values())
+    MINE_comp_ids = set()
+    for MINE_query_result in threaded_quicksearch(con, db, KEGG_comp_ids):
+        try:
+            MINE_comp_ids.add(MINE_query_result['_id'])
+        except KeyError:
+            continue
 
     # Download the MINE compounds corresponding to KEGG IDs
     print("Downloading MINE compounds...\n")
-    MINE_comps = threaded_getcomps(con, db, MINE_comp_ids)
+    MINE_comps = threaded_getcomps(con, db, list(MINE_comp_ids))
 
     # Create a list of IDs for MINE reactions to download
-    s_out("Identifying MINE reactions to download...")
     MINE_rxn_ids = set()
+    p = Progress(max_val=len(MINE_comps))
+    n = 0
     for comp in MINE_comps:
+        n += 1
+        s_out("\rIdentifying MINE reactions to download... %s" % p.to_string(n))
         MINE_rxn_ids = MINE_rxn_ids.union(set(extract_comp_reaction_ids(comp)))
-    s_out(" Done.\n")
+    print("")
 
     # Download the MINE reactions listed for the MINE compounds
     s_out("Downloading MINE reactions...\n")
@@ -3179,24 +3255,20 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
     s_out(" Done.\n")
 
     # Remove MINE reactions that have non-KEGG compounds
-    s_out("Filtering MINE reactions...")
     MINE_rxns = remove_non_KEGG_MINE_rxns(MINE_rxns, MINE_comps)
 
     # Remove redundant MINE reactions
     MINE_rxns = remove_redundant_MINE_rxns(MINE_rxns)
-    s_out(" Done.\n")
 
     # Create a list of MINE reactions in terms of KEGG compounds
-    s_out("Constructing MINE reactions with KEGG compound IDs...")
     MINE_rxns = KEGG_rxns_from_MINE_rxns(MINE_rxns, MINE_comps)
-    s_out(" Done.\n")
 
     # Add the new MINE reactions to the KEGG compounds
-    s_out("Updating raw KEGG reaction network data...")
     KEGG_comps = list(KEGG_comp_dict.values())
     KEGG_comps = add_MINE_rxns_to_KEGG_comps(KEGG_comps, MINE_rxns)
 
     # Add the new MINE reactions to the KEGG reactions dictionary
+    s_out("Updating raw KEGG reaction network data...")
     KEGG_rxn_dict.update(dict([(rxn['_id'], rxn) for rxn in MINE_rxns]))
 
     # Create a new KEGG compound dictionary
@@ -3277,8 +3349,6 @@ def test_enhance_KEGG_with_MINE():
     enh_KEGG_comp_dict, enh_KEGG_rxn_dict = enhance_KEGG_with_MINE(
         KEGG_comp_dict, KEGG_rxn_dict
     )
-
-    print([r['_id'] for r in enh_KEGG_rxn_dict.values()])
 
     # Assert equality
     assert exp_KEGG_comp_dict == enh_KEGG_comp_dict
