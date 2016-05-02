@@ -23,9 +23,10 @@ from progress import Progress
 
 # Define functions
 def allow_reaction_listing(kegg_comp, kegg_rxn):
-    # Is the compound inorganic or CO2?
+    # Is the compound inorganic?
+    inorganic_C = ["C00011","C00288","C01353","C00237"]
     if 'Formula' in kegg_comp.keys():
-        if not limit_carbon(kegg_comp, 0) or kegg_comp['_id'] == "C00011":
+        if not limit_carbon(kegg_comp, 0) or kegg_comp['_id'] in inorganic_C:
             return False
     # Is the compound CoA or ACP?
     if kegg_comp['_id'] in {"C00010", "C00229"}:
@@ -37,6 +38,9 @@ def allow_reaction_listing(kegg_comp, kegg_rxn):
                 return False
             if kegg_comp['_id'] in rp[1][0] and rp[0] == "RP00003":
                 return False
+    # Does the compound have a formula?
+    if "Formula" not in kegg_comp.keys():
+        return False
     # If the compound passed all the tests, the reaction is free to be listed
     return True
 
@@ -84,15 +88,24 @@ def test_allow_reaction_listing():
     rxn = format_KEGG_reaction(get_KEGG_text(cpd['Reactions'][167]))
     assert not allow_reaction_listing(cpd, rxn)
 
-    # ...as well as CO2
+    # ...as well as CO2 and other inorganic carbon
     cpd = format_KEGG_compound(get_KEGG_text("C00011"))
     rxn = format_KEGG_reaction(get_KEGG_text(cpd['Reactions'][89]))
+    assert not allow_reaction_listing(cpd, rxn)
+
+    cpd = format_KEGG_compound(get_KEGG_text("C00237"))
+    rxn = format_KEGG_reaction(get_KEGG_text(cpd['Reactions'][5]))
     assert not allow_reaction_listing(cpd, rxn)
 
     # Keep single-carbon reduced compounds though
     cpd = format_KEGG_compound(get_KEGG_text("C00132")) # Methanol
     rxn = format_KEGG_reaction(get_KEGG_text(cpd['Reactions'][23]))
     assert allow_reaction_listing(cpd, rxn)
+
+    # Compounds without a formula are disallowed
+    cpd = format_KEGG_compound(get_KEGG_text("C00139")) # Ox. ferredoxin
+    rxn = format_KEGG_reaction(get_KEGG_text("R05742"))
+    assert not allow_reaction_listing(cpd, rxn)
 
 
 def sort_KEGG_reactions(kegg_comp_dict, kegg_rxn_dict, verbose=False):
@@ -877,7 +890,7 @@ def limit_carbon(comp, C_limit=25):
             comp_id = comp['_id']
         except KeyError:
             comp_id = 'UnknownCompound'
-        s_err("Warning: '%s' has no formula and passes the C-limit." % (comp_id))
+        s_err("Warning: '%s' has no formula and passes the C-limit.\n" % (comp_id))
         return False
     # Find all elements in the formula
     match = re.findall(regex, formula)
@@ -2702,12 +2715,46 @@ def remove_redundant_MINE_rxns(rxns):
 
     discarded_rxns = set()
 
+    # Identify all operators
+    all_operators = set()
+    p = Progress(max_val=len(rxns), design='p')
+    n = 0
+    for rxn in rxns:
+        n += 1
+        s_out("\rIdentifying operators... %s" % p.to_string(n))
+        for operator in rxn['Operators']:
+            all_operators.add(operator)
+    s_out("\rIdentifying operators... Done. \n")
+
+    # Identify operators that have a reverse
+    operators_with_reverse = set()
+    for op1 in all_operators:
+        for op2 in all_operators - set([op1]):
+            if operators_identical(op1, op2):
+                operators_with_reverse.add(op1)
+
+    # Reduce the reactions to those in which all operators have a reverse
+    rxns_red = []
+    p = Progress(max_val=len(rxns), design='p')
+    n = 0
+    for rxn in enumerate(rxns):
+        n += 1
+        s_out("\rIdentifying redundancy candidates... %s" % p.to_string(n))
+        add_rxn = True
+        for operator in rxn[1]['Operators']:
+            if operator not in operators_with_reverse:
+                add_rxn = False
+                break
+        if add_rxn:
+            rxns_red.append(rxn)
+    s_out("\rIdentifying possibly redundant reactions... Done. \n")
+
     # Set up progress indicator
-    p = Progress(max_val = len(rxns)**2, design='pt')
+    p = Progress(max_val = len(rxns_red)**2, design='pt')
     n = 0
 
     # Iterate over all reaction pairs
-    for rp in product(enumerate(rxns), enumerate(rxns)):
+    for rp in product(rxns_red, rxns_red):
         # Report progress
         n += 1
         s_out("\rRemoving redundant MINE reactions... %s" % p.to_string(n))
@@ -2717,7 +2764,7 @@ def remove_redundant_MINE_rxns(rxns):
             continue
 
         # Don't perform further comparisons for discarded reactions
-        if set([rp[0][0], rp[1][0]]).intersection(discarded_rxns):
+        if rp[0][0] in discarded_rxns or rp[1][0] in discarded_rxns:
             continue
 
         # Compare the Products and reactants
@@ -2906,7 +2953,7 @@ def KEGG_rxns_from_MINE_rxns(rxns, comps):
 
     # Produce KEGG-labeled reactions
     KEGG_rxns = []
-    p = Progress(max_val=len(rxns), design='pt')
+    p = Progress(max_val=len(rxns), design='p')
     n = 0
     for rxn in rxns:
         # Report progress
@@ -2991,7 +3038,7 @@ def KEGG_rxns_from_MINE_rxns(rxns, comps):
 
             # ...and count one step up
             n += 1
-
+    s_out("\rProducing MINE reactions with KEGG IDs... Done. \n")
     return KEGG_rxns
 
 def test_KEGG_rxns_from_MINE_rxns():
@@ -3143,14 +3190,17 @@ def add_MINE_rxns_to_KEGG_comps(comps, rxns):
         # Add the updated compound to the new compounds list
         new_comps.append(new_comp)
 
+    print("")
+
     return new_comps
 
 def test_add_MINE_rxns_to_KEGG_comps():
     comps = [
-        {'_id':'C00001', 'Reactant_in':['R00001']},
-        {'_id':'C00002', 'Product_of':['R00001'], 'Reactant_in':['R00002']},
-        {'_id':'C00003'},
-        {'_id':'C00004', 'Product_of':['R00004']}
+        {'_id':'C00001', 'Formula':'C2H6', 'Reactant_in':['R00001']},
+        {'_id':'C00002', 'Formula':'C2H6',
+            'Product_of':['R00001'], 'Reactant_in':['R00002']},
+        {'_id':'C00003', 'Formula':'C2H6'},
+        {'_id':'C00004', 'Formula':'C2H6', 'Product_of':['R00004']}
     ]
     rxns = [
         {'_id':'R1_0',
@@ -3174,16 +3224,16 @@ def test_add_MINE_rxns_to_KEGG_comps():
         }}
     ]
     exp_comps = [
-        {'_id':'C00001',
+        {'_id':'C00001', 'Formula':'C2H6',
             'Reactant_in':['R00001','R3_12'],
             'Product_of':['R2_2']},
-        {'_id':'C00002',
+        {'_id':'C00002', 'Formula':'C2H6',
             'Product_of':['R00001','R3_12'],
             'Reactant_in':['R00002','R1_0']},
-        {'_id':'C00003',
+        {'_id':'C00003', 'Formula':'C2H6',
             'Reactant_in':['R2_2','R3_12'],
             'Product_of':['R1_0']},
-        {'_id':'C00004',
+        {'_id':'C00004', 'Formula':'C2H6',
             'Product_of':['R00004'],
             'Reactant_in':['R3_12']}
     ]

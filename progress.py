@@ -172,15 +172,16 @@ class Progress():
         if self.__avg_speed():
             remaining_time = (self.max_val - self.val) / self.__avg_speed()
             if remaining_time <= 24*3600-1:
-                return str(self.__timedelta(seconds=int(remaining_time)))
+                clock = str(self.__timedelta(seconds=int(remaining_time)))
+                return "{0:>8}".format(clock)
             elif remaining_time <= 7*24*3600-1:
                 days = str(self.__timedelta(seconds=int(remaining_time)).days)
-                return '>' + days + ' days'
+                return ' >' + days + ' days'
             else:
-                return '>1 week'
+                return ' >1 week'
         # Return a blank remaining time string if the average speed is zero
         else:
-            return '-:--:--'
+            return '--:--:--'
 
     def counter(self):
         """The actual value as a fraction of the maximum"""
