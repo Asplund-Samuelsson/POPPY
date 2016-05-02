@@ -3206,6 +3206,7 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
     KEGG_comp_ids = list(KEGG_comp_dict.keys())
 
     # Create a list of IDs for MINE compounds to download
+    print("Identifying KEGG compounds in MINE...")
     MINE_comp_ids = set()
     for MINE_query_result in threaded_quicksearch(con, db, KEGG_comp_ids):
         try:
@@ -3214,25 +3215,27 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
             continue
 
     # Download the MINE compounds corresponding to KEGG IDs
-    print("Downloading MINE compounds...\n")
+    print("\nDownloading MINE compounds...")
     MINE_comps = threaded_getcomps(con, db, list(MINE_comp_ids))
+    print("")
 
     # Create a list of IDs for MINE reactions to download
     MINE_rxn_ids = set()
-    p = Progress(max_val=len(MINE_comps))
+    p = Progress(max_val=len(MINE_comps), design='p')
     n = 0
     for comp in MINE_comps:
         n += 1
         s_out("\rIdentifying MINE reactions to download... %s" % p.to_string(n))
-        MINE_rxn_ids = MINE_rxn_ids.union(set(extract_comp_reaction_ids(comp)))
-    print("")
+        for MINE_rxn_id in extract_comp_reaction_ids(comp):
+            MINE_rxn_ids.add(MINE_rxn_id)
+    s_out("\rIdentifying MINE reactions to download... Done. \n")
 
     # Download the MINE reactions listed for the MINE compounds
     s_out("Downloading MINE reactions...\n")
-    MINE_rxns = threaded_getrxn(con, db, list(MINE_rxn_ids))
+    MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
 
     # Download the 'X' MINE compounds listed for the reactions
-    s_out("Identifying cofactors...")
+    s_out("\nIdentifying cofactors...")
     MINE_X_comp_ids = set()
     for rxn in MINE_rxns:
         cids = set(extract_reaction_comp_ids(rxn))
@@ -3240,11 +3243,11 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
             if cid.startswith('X'):
                 MINE_X_comp_ids.add(cid)
     s_out(" Done.\n")
-    s_out("Downloading MINE cofactors...\n")
+    s_out("\nDownloading MINE cofactors...\n")
     MINE_comps = MINE_comps + threaded_getcomps(con, db, list(MINE_X_comp_ids))
 
     # Create a SMILES to KEGG dictionary from the KEGG compound dictionary
-    s_out("Setting up SMILES to KEGG translation...")
+    s_out("\nSetting up SMILES to KEGG translation...")
     SMILES_to_KEGG = create_SMILES_to_KEGG_dict(KEGG_comp_dict)
     s_out(" Done.\n")
 

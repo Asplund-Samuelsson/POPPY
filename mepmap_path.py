@@ -1046,9 +1046,46 @@ def test_parse_compound(capsys):
     assert err == exp_err
 
 
+def update_start_compounds(network, start_comp_ids):
+    """Update the start compound status for each compound node."""
+    S = set(start_comp_ids)
+    for n in network.nodes():
+        if network.node[n]['type'] == 'c':
+            if network.node[n]['mid'] in S:
+                start = True
+            else:
+                start = False
+            network.node[n]['start'] = start
+
+def test_update_start_compounds():
+    G = nx.DiGraph()
+
+    G.add_node(1,type='c',mid='C1',start=True) # Will be changed
+    G.add_node(2,type='c',mid='C2',start=False) # Will be changed
+    G.add_node(3,type='c',mid='C3',start=True) # Will not be changed
+    G.add_node(4,type='c',mid='C4',start=False) # Will not be changed
+    G.add_node(5,type='rf',mid='R1')
+    G.add_node(6,type='pf',mid='R1')
+    G.add_node(7,type='rr',mid='R1')
+    G.add_node(8,type='pr',mid='R1')
+
+    G.add_path([1,5,6,2])
+
+    H = G.copy()
+    H.node[1]['start'] = False
+    H.node[2]['start'] = True
+
+    start_comp_ids = ['C2','C3']
+
+    update_start_compounds(G, start_comp_ids)
+
+    assert G.nodes(data=True) == H.nodes(data=True)
+    assert nx.is_isomorphic(G, H)
+
+
 # Main code block
-def main(infile_name, compound, exact_comp_id, reaction_limit,
-    n_procs, sub_network_out, outfile_name):
+def main(infile_name, compound, start_comp_id_file, exact_comp_id,
+    reaction_limit, n_procs, sub_network_out, outfile_name):
 
     # Default results are empty
     results = {}
@@ -1057,6 +1094,11 @@ def main(infile_name, compound, exact_comp_id, reaction_limit,
     s_out("\nLoading network pickle...")
     network = pickle.load(open(infile_name, 'rb'))
     s_out(" Done.\n")
+
+    # Update starting compounds
+    if start_comp_id_file:
+        S = [L.rstrip() for L in open(start_comp_id_file, 'r').readlines()]
+        update_start_compounds(network, S)
 
     # Pathway enumeration
     if not exact_comp_id:
@@ -1099,6 +1141,10 @@ if __name__ == "__main__":
         help='Target compound.'
     )
     parser.add_argument(
+        '-S', '--start_comp_ids', type=str,
+        help='Provide new starting compounds in a file.'
+    )
+    parser.add_argument(
         '-o', '--outfile', type=str, default=False,
         help='Save identified pathways in pickle.'
     )
@@ -1119,5 +1165,5 @@ if __name__ == "__main__":
         help='Number of parallel processes to run.'
     )
     args = parser.parse_args()
-    main(args.infile, args.compound, args.exact_comp_id, args.reactions, \
-    args.processes, args.sub_network, args.outfile)
+    main(args.infile, args.compound, args.start_comp_ids, args.exact_comp_id,
+    args.reactions, args.processes, args.sub_network, args.outfile)

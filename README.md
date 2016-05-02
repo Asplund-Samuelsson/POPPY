@@ -11,6 +11,7 @@ of putative biosynthetic pathways.
 #### Dependencies
 - Python ≥ 3.5.1
 - Python NetworkX: https://github.com/networkx/networkx
+- Python RDKit: https://github.com/rdkit/rdkit
 - Python MINE-API: https://github.com/JamesJeffryes/MINE-API (included as **mineclient3.py**)
 
 #### Author

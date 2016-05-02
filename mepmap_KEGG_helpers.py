@@ -397,15 +397,20 @@ def get_KEGG_comps(comp_id_list, num_workers=128):
     def worker():
         while True:
             comp_id = work.get()
-            if comp_id is None:
-                work.task_done()
-                break
-            kegg_text = get_KEGG_text(comp_id)
-            if not kegg_text is None:
-                kegg_comp = format_KEGG_compound(kegg_text)
-                if not kegg_comp is None:
+            try:
+                if comp_id is None:
+                    work.task_done()
+                    break
+                kegg_text = get_KEGG_text(comp_id)
+                if not kegg_text is None:
+                    kegg_comp = format_KEGG_compound(kegg_text)
                     output.put(kegg_comp)
-            work.task_done()
+                else:
+                    output.put(None)
+                work.task_done()
+            except:
+                work.put(comp_id)
+                work.task_done()
 
     work = queue.Queue()
     output = queue.Queue()
@@ -423,15 +428,12 @@ def get_KEGG_comps(comp_id_list, num_workers=128):
     # Report progress
     M = len(comp_id_list)
     p = Progress(design='pbct', max_val=M)
-    while True:
-        if not work.qsize():
-            n = M - work.qsize()
-            p.write(n)
-            break
-        else:
-            n = M - work.qsize()
-            p.write(n)
-            time.sleep(1)
+    while M - output.qsize():
+        n = output.qsize()
+        p.write(n)
+        time.sleep(1)
+    n = output.qsize()
+    p.write(n)
     print("")
 
     # Block until all work is done
@@ -450,7 +452,7 @@ def get_KEGG_comps(comp_id_list, num_workers=128):
     while not output.empty():
         comps.append(output.get())
 
-    return comps
+    return list(filter(None, comps))
 
 def test_get_KEGG_comps():
     comp_ids = ["C04625","C13929","C10269","C05119","C02419"]
@@ -472,15 +474,20 @@ def get_KEGG_rxns(rxn_id_list, num_workers=128):
     def worker():
         while True:
             rxn_id = work.get()
-            if rxn_id is None:
-                work.task_done()
-                break
-            kegg_text = get_KEGG_text(rxn_id)
-            if not kegg_text is None:
-                kegg_rxn = format_KEGG_reaction(kegg_text)
-                if not kegg_rxn is None:
+            try:
+                if rxn_id is None:
+                    work.task_done()
+                    break
+                kegg_text = get_KEGG_text(rxn_id)
+                if not kegg_text is None:
+                    kegg_rxn = format_KEGG_reaction(kegg_text)
                     output.put(kegg_rxn)
-            work.task_done()
+                else:
+                    output.put(None)
+                work.task_done()
+            except:
+                work.put(rxn_id)
+                work.task_done()
 
     work = queue.Queue()
     output = queue.Queue()
@@ -498,15 +505,12 @@ def get_KEGG_rxns(rxn_id_list, num_workers=128):
     # Report progress
     M = len(rxn_id_list)
     p = Progress(design='pbct', max_val=M)
-    while True:
-        if not work.qsize():
-            n = M - work.qsize()
-            p.write(n)
-            break
-        else:
-            n = M - work.qsize()
-            p.write(n)
-            time.sleep(1)
+    while M - output.qsize():
+        n = output.qsize()
+        p.write(n)
+        time.sleep(1)
+    n = output.qsize()
+    p.write(n)
     print("")
 
     # Block until all work is done
@@ -524,7 +528,7 @@ def get_KEGG_rxns(rxn_id_list, num_workers=128):
     while not output.empty():
         rxns.append(output.get())
 
-    return rxns
+    return list(filter(None, rxns))
 
 def test_get_KEGG_rxns():
     rxn_ids = ["R10430","R07960","R04715","R07211","R10332"]
