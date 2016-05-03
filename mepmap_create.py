@@ -39,10 +39,24 @@ def allow_reaction_listing(kegg_comp, kegg_rxn):
         return False
 
     # Is the compound a cofactor?
-    if "RPair" in kegg_rxn.keys():
-        for rp in kegg_rxn['RPair'].items():
-            if kegg_comp['_id'] in rp[1][0] and rp[1][1] == "cofac":
-                return False
+    cofactor_pairs = {
+        "C00004" : ("C00004", "C00003"), # NADH/NAD+
+        "C00003" : ("C00004", "C00003"), # NADH/NAD+
+        "C00005" : ("C00005", "C00006"), # NADPH/NADP+
+        "C00006" : ("C00005", "C00006"), # NADPH/NADP+
+        "C01352" : ("C01352", "C00016"), # FADH2/FAD
+        "C00016" : ("C01352", "C00016")  # FADH2/FAD
+    }
+    try:
+        C = cofactor_pairs[kegg_comp['_id']]
+        R = [c[1] for c in kegg_rxn['Reactants']]
+        P = [c[1] for c in kegg_rxn['Products']]
+        if C[0] in R and C[1] in P:
+            return False
+        if C[0] in P and C[1] in R:
+            return False
+    except KeyError:
+        pass
 
     # Is the compound a nucleotide involved in a reaction with nucleotides on
     # both reactant and product sides?
@@ -69,10 +83,6 @@ def test_allow_reaction_listing():
     rxn = {"_id":"R1", "RPair":{"RP1":("C1_C2","main"),"RP2":("C3_C4","cofac")}}
     assert allow_reaction_listing(cpd, rxn)
 
-    # C1 is a cofactor
-    rxn = {"_id":"R2", "RPair":{"RP3":("C1_C5","cofac"),"RP4":("C6_C7","main")}}
-    assert not allow_reaction_listing(cpd, rxn)
-
     # C1 is not in an RPair
     rxn = {"_id":"R1", "RPair":{"RP1":("C5_C2","main"),"RP2":("C3_C4","cofac")}}
     assert allow_reaction_listing(cpd, rxn)
@@ -80,7 +90,6 @@ def test_allow_reaction_listing():
     # ATP/ADP reaction pair should not be listed (RP00003)
     cpd = {"_id":"C00002", "Reactions":['R1','R2'], 'Formula':'C10'}
     rxn = {"_id":"R1",
-           "RPair":{"RP00003":("C00002_C00008","ligase")},
            "Reactants":[[1,'C10000'],[1,'C00002']],
            "Products":[[1,'C00008'],[1,'C00100']]}
     assert not allow_reaction_listing(cpd, rxn)
@@ -178,6 +187,25 @@ def test_allow_reaction_listing():
             assert allow_reaction_listing(cpd2, rxn2f)
             assert allow_reaction_listing(cpd2, rxn2r)
 
+    # Cofactor molecules partaking as cofactors are disallowed
+    cpd1 = format_KEGG_compound(get_KEGG_text("C00004")) # NADH
+    cpd2 = format_KEGG_compound(get_KEGG_text("C00003")) # NAD+
+    rxn = format_KEGG_reaction(get_KEGG_text("R00605"))
+    assert not allow_reaction_listing(cpd1, rxn)
+    assert not allow_reaction_listing(cpd2, rxn)
+
+    cpd1 = format_KEGG_compound(get_KEGG_text("C00006")) # NADPH
+    cpd2 = format_KEGG_compound(get_KEGG_text("C00005")) # NADP+
+    rxn = format_KEGG_reaction(get_KEGG_text("R01452"))
+    assert not allow_reaction_listing(cpd1, rxn)
+    assert not allow_reaction_listing(cpd2, rxn)
+
+    cpd1 = format_KEGG_compound(get_KEGG_text("C01352")) # FADH2
+    cpd2 = format_KEGG_compound(get_KEGG_text("C00016")) # FAD
+    rxn = format_KEGG_reaction(get_KEGG_text("R07934"))
+    assert not allow_reaction_listing(cpd1, rxn)
+    assert not allow_reaction_listing(cpd2, rxn)
+
 
 def sort_KEGG_reactions(kegg_comp_dict, kegg_rxn_dict, verbose=False):
     """
@@ -228,7 +256,7 @@ def test_sort_KEGG_reactions():
     # C5 lists a reaction in which it is not listed
     # C6 does not list reactions
     kegg_comp_dict = {
-        "C1":{"_id":"C1","Reactions":["R1","R2"],"Formula":"C10H18O2"},
+        "C00003":{"_id":"C00003","Reactions":["R1","R2"],"Formula":"C10H18O2"},
         "C2":{"_id":"C2","Reactions":["R3","R4"],"Formula":"XeF4"},
         "C3":{"_id":"C3","Reactions":["R5","R6"],"Formula":"C10H12O3"},
         "C4":{"_id":"C4","Reactions":["R5","RX"],"Formula":"C2H5O"},
@@ -236,24 +264,17 @@ def test_sort_KEGG_reactions():
         "C6":{"_id":"C6","Formula":"C12"}
     }
     kegg_rxn_dict = {
-        "R1":{"_id":"R1","Reactants":[[1,"C1"]],"Products":[[1,"X1"]],
-              "RPair":{"RP1":("C1_X1","main")}},
-        "R2":{"_id":"R2","Reactants":[[1,"C1"],[1,"C100"]],
-              "Products":[[1,"C101"],[2,"C10"]],"RPair":{"RP2":("C100_C101",
-              "main"),"RP3":("C1_C10","cofac")}},
-        "R3":{"_id":"R3","Reactants":[[1,"C2"]],"Products":[[1,"X2"]],
-              "RPair":{"RP4":("C2_X2","main")}},
-        "R4":{"_id":"R3","Reactants":[[1,"Z2"]],"Products":[[1,"C2"]],
-              "RPair":{"RP5":("Z2_C2","main")}},
-        "R5":{"_id":"R5","Reactants":[[1,"C3"],[1,"Z9"]],"Products":[[1,"C4"]],
-              "RPair":{"RP6":("C3_C4","main"),"RP7":("Z9_C4","trans")}},
-        "R6":{"_id":"R6","Reactants":[[1,"C9"]],"Products":[[1,"C8"],[1,"C3"]],
-              "RPair":{"RP8":("C9_C3","main")}},
-        "R7":{"_id":"R7","Reactants":[[1,"X4"]],"Products":[[1,"Z4"]],
-              "RPair":{"RP9":("X4_Z4","main")}}
+        "R1":{"_id":"R1","Reactants":[[1,"C00003"]],"Products":[[1,"X1"]]},
+        "R2":{"_id":"R2","Reactants":[[1,"C00003"],[1,"C100"]],
+              "Products":[[1,"C101"],[2,"C00004"]]},
+        "R3":{"_id":"R3","Reactants":[[1,"C2"]],"Products":[[1,"X2"]]},
+        "R4":{"_id":"R3","Reactants":[[1,"Z2"]],"Products":[[1,"C2"]]},
+        "R5":{"_id":"R5","Reactants":[[1,"C3"],[1,"Z9"]],"Products":[[1,"C4"]]},
+        "R6":{"_id":"R6","Reactants":[[1,"C9"]],"Products":[[1,"C8"],[1,"C3"]]},
+        "R7":{"_id":"R7","Reactants":[[1,"X4"]],"Products":[[1,"Z4"]]}
     }
     expected_comp_dict = {
-        "C1":{"_id":"C1","Reactions":["R1","R2"],"Formula":"C10H18O2",
+        "C00003":{"_id":"C00003","Reactions":["R1","R2"],"Formula":"C10H18O2",
               "Reactant_in":["R1"]},
         "C2":{"_id":"C2","Reactions":["R3","R4"],"Formula":"XeF4"},
         "C3":{"_id":"C3","Reactions":["R5","R6"],"Formula":"C10H12O3",
@@ -3016,15 +3037,6 @@ def KEGG_rxns_from_MINE_rxns(rxns, comps, KEGG_comp_ids):
     [(c['_id'], [k for k in c['DB_links']['KEGG'] if k in K]) for c in comps]
     )
 
-    # Set up a MINE ID to Cofactor status dictionary
-    def is_not_connected(comp):
-        if set(['Reactant_in','Product_of']).intersection(comp.keys()):
-            return False
-        else:
-            return True
-
-    is_cof = dict([(c['_id'], is_not_connected(c)) for c in comps])
-
     # Produce KEGG-labeled reactions
     KEGG_rxns = []
     p = Progress(max_val=len(rxns), design='p')
@@ -3033,16 +3045,6 @@ def KEGG_rxns_from_MINE_rxns(rxns, comps, KEGG_comp_ids):
         # Report progress
         n += 1
         s_out("\rProducing MINE reactions with KEGG IDs... %s" % p.to_string(n))
-
-        # Determine positions of cofactors
-        r_cofacs = []
-        for e in enumerate([is_cof[c[1]] for c in rxn['Reactants']]):
-            if e[1]:
-                r_cofacs.append(e[0])
-        p_cofacs = []
-        for e in enumerate([is_cof[c[1]] for c in rxn['Products']]):
-            if e[1]:
-                p_cofacs.append(e[0])
 
         # Create combinations of KEGG IDs
         r_combos = product(*[M2K[c[1]] for c in rxn['Reactants']])
@@ -3068,51 +3070,14 @@ def KEGG_rxns_from_MINE_rxns(rxns, comps, KEGG_comp_ids):
             # Update Products
             new_rxn['Products'] = [list(i) for i in zip(p_coeffs, rp_pair[1])]
 
-            # Create RPair dictionary
-            rp_dict = {}
-
-            # Define a function for building up the RPair entries
-            def build_RPair_dict(rp_dict, en_comp, cof_indices):
-                # The compound could be a cofactor...
-                if en_comp[0] in cof_indices:
-                    try:
-                        entry = rp_dict['cofac'][0] + '_' + en_comp[1]
-                        rp_dict['cofac'][0] = entry
-                    except KeyError:
-                        rp_dict['cofac'] = [en_comp[1], 'cofac']
-
-                # ...or a main participant
-                else:
-                    try:
-                        entry = rp_dict['main'][0] + '_' + en_comp[1]
-                        rp_dict['main'][0] = entry
-                    except KeyError:
-                        rp_dict['main'] = [en_comp[1], 'main']
-
-                # Return the expanded RPair dictionary
-                return rp_dict
-
-            # Build up RPair entries with reactants
-            for en_r in enumerate(rp_pair[0]):
-                build_RPair_dict(rp_dict, en_r, r_cofacs)
-
-            # Build up RPair entries with products
-            for en_p in enumerate(rp_pair[1]):
-                build_RPair_dict(rp_dict, en_p, p_cofacs)
-
-            # Convert to tuples
-            for item in rp_dict.items():
-                rp_dict[item[0]] = tuple(item[1])
-
-            # Add the RPair entries to the reaction
-            new_rxn['RPair'] = rp_dict
-
             # Finally, add the reaction to the list of new reactions
             KEGG_rxns.append(new_rxn)
 
             # ...and count one step up
             n += 1
+
     s_out("\rProducing MINE reactions with KEGG IDs... Done. \n")
+
     return KEGG_rxns
 
 def test_KEGG_rxns_from_MINE_rxns():
@@ -3153,76 +3118,48 @@ def test_KEGG_rxns_from_MINE_rxns():
     exp_rxns = [
         {'_id':'R1_0', 'Operators':['1.1.1.a'],
         'Reactants':[[1,'C10000'],[1,'C20000']],
-        'Products':[[1,'C30000'],[1,'C40000']],
-        'RPair':{
-            'main':('C10000_C20000_C30000_C40000','main')
-        }},
+        'Products':[[1,'C30000'],[1,'C40000']]
+        },
         {'_id':'R1_1', 'Operators':['1.1.1.a'],
         'Reactants':[[1,'C10000'],[1,'C20000']],
-        'Products':[[1,'C30001'],[1,'C40000']],
-        'RPair':{
-            'main':('C10000_C20000_C30001_C40000','main')
-        }},
+        'Products':[[1,'C30001'],[1,'C40000']]
+        },
         {'_id':'R1_2', 'Operators':['1.1.1.a'],
         'Reactants':[[1,'C10001'],[1,'C20000']],
-        'Products':[[1,'C30000'],[1,'C40000']],
-        'RPair':{
-            'main':('C10001_C20000_C30000_C40000','main')
-        }},
+        'Products':[[1,'C30000'],[1,'C40000']]
+        },
         {'_id':'R1_3', 'Operators':['1.1.1.a'],
         'Reactants':[[1,'C10001'],[1,'C20000']],
-        'Products':[[1,'C30001'],[1,'C40000']],
-        'RPair':{
-            'main':('C10001_C20000_C30001_C40000','main')
-        }},
+        'Products':[[1,'C30001'],[1,'C40000']]
+        },
         {'_id':'R5_0', 'Operators':['1.2.1.a'],
         'Reactants':[[1,'C00003'],[1,'C20000']],
-        'Products':[[1,'C30000'],[1,'C00002']],
-        'RPair':{
-            'main':('C20000_C30000','main'),
-            'cofac':('C00003_C00002', 'cofac')
-        }},
+        'Products':[[1,'C30000'],[1,'C00002']]
+        },
         {'_id':'R5_1', 'Operators':['1.2.1.a'],
         'Reactants':[[1,'C00003'],[1,'C20000']],
-        'Products':[[1,'C30001'],[1,'C00002']],
-        'RPair':{
-            'main':('C20000_C30001','main'),
-            'cofac':('C00003_C00002', 'cofac')
-        }},
+        'Products':[[1,'C30001'],[1,'C00002']]
+        },
         {'_id':'R6_0', 'Operators':['1.3.1.a'],
         'Reactants':[[2,'C10000'],[1,'C10000']],
-        'Products':[[1,'C40000'],[1,'C20000']],
-        'RPair':{
-            'main':('C10000_C20000','main'),
-            'cofac':('C10000_C40000', 'cofac')
-        }},
+        'Products':[[1,'C40000'],[1,'C20000']]
+        },
         {'_id':'R6_1', 'Operators':['1.3.1.a'],
         'Reactants':[[2,'C10000'],[1,'C10000']],
-        'Products':[[1,'C40001'],[1,'C20000']],
-        'RPair':{
-            'main':('C10000_C20000','main'),
-            'cofac':('C10000_C40001', 'cofac')
-        }},
+        'Products':[[1,'C40001'],[1,'C20000']]
+        },
         {'_id':'R6_2', 'Operators':['1.3.1.a'],
         'Reactants':[[2,'C10001'],[1,'C10000']],
-        'Products':[[1,'C40000'],[1,'C20000']],
-        'RPair':{
-            'main':('C10001_C20000','main'),
-            'cofac':('C10000_C40000', 'cofac')
-        }},
+        'Products':[[1,'C40000'],[1,'C20000']]
+        },
         {'_id':'R6_3', 'Operators':['1.3.1.a'],
         'Reactants':[[2,'C10001'],[1,'C10000']],
-        'Products':[[1,'C40001'],[1,'C20000']],
-        'RPair':{
-            'main':('C10001_C20000','main'),
-            'cofac':('C10000_C40001', 'cofac')
-        }},
+        'Products':[[1,'C40001'],[1,'C20000']]
+        },
         {'_id':'R9_0', 'Operators':['1.1.4.a', '3.4.2.-'],
         'Reactants':[[1,'C20000']],
-        'Products':[[1,'C40000']],
-        'RPair':{
-            'main':('C20000_C40000','main')
-        }}
+        'Products':[[1,'C40000']]
+        }
     ]
     new_rxns = KEGG_rxns_from_MINE_rxns(rxns, comps, kegg_comp_ids)
     assert len(exp_rxns) == len(new_rxns)
@@ -3231,6 +3168,20 @@ def test_KEGG_rxns_from_MINE_rxns():
 
 def add_MINE_rxns_to_KEGG_comps(comps, rxns):
     """Add MINE reactions to KEGG compound 'Reactant_in'/'Product_of' lists."""
+
+    # Create a KEGG ID to reaction dictionary
+    K2R = {}
+    p = Progress(max_val=len(rxns), design='p')
+    n = 0
+    # Go through the rxns and store a set of valid indices for each cpd
+    for rxn in enumerate(rxns):
+        n += 1
+        s_out("\rListing MINE reactions per KEGG compound... %s" % p.to_string(n))
+        for comp_id in extract_reaction_comp_ids(rxn[1]):
+            try:
+                K2R[comp_id].add(rxn[0])
+            except KeyError:
+                K2R[comp_id] = set([rxn[0]])
 
     # Initialize list of updated compounds
     new_comps = []
@@ -3246,8 +3197,14 @@ def add_MINE_rxns_to_KEGG_comps(comps, rxns):
         # Initialize a new compound
         new_comp = deepcopy(comp)
 
+        # Now go through only the reactions in which the compound takes part
+        try:
+            comp_rxns = [rxns[i] for i in sorted(list(K2R[comp['_id']]))]
+        except KeyError:
+            comp_rxns = []
+
         # Check if the compound should list any of the reactions
-        for rxn in rxns:
+        for rxn in comp_rxns:
 
             # Check if the compound may list the reaction
             if not allow_reaction_listing(comp, rxn):
@@ -3276,35 +3233,29 @@ def add_MINE_rxns_to_KEGG_comps(comps, rxns):
 
 def test_add_MINE_rxns_to_KEGG_comps():
     comps = [
-        {'_id':'C00001', 'Formula':'C2H6', 'Reactant_in':['R00001']},
+        {'_id':'C00016', 'Formula':'C2H6', 'Reactant_in':['R00001']},
         {'_id':'C00002', 'Formula':'C2H6',
             'Product_of':['R00001'], 'Reactant_in':['R00002']},
         {'_id':'C00003', 'Formula':'C2H6'},
-        {'_id':'C00004', 'Formula':'C2H6', 'Product_of':['R00004']}
+        {'_id':'C01352', 'Formula':'C2H6', 'Product_of':['R00004']},
+        {'_id':'C99999', 'Formula':'C2H6', 'Product_of':['R99999']}
     ]
     rxns = [
         {'_id':'R1_0',
-        'Reactants':[[1,'C00002'],[1,'C00004']],
-        'Products':[[1,'C00003'],[1,'C00001']],
-        'RPair':{
-            'main':('C00002_C00003','main'),
-            'cofac':('C00004_C00001','cofac')
-        }},
+        'Reactants':[[1,'C00002'],[1,'C01352']],
+        'Products':[[1,'C00003'],[1,'C00016']],
+        },
         {'_id':'R2_2',
         'Reactants':[[1,'C00003']],
-        'Products':[[1,'C00001']],
-        'RPair':{
-            'main':('C00003_C00001','main')
-        }},
+        'Products':[[1,'C00016']]
+        },
         {'_id':'R3_12',
-        'Reactants':[[1,'C00001'],[1,'C00003'],[1,'C00004']],
+        'Reactants':[[1,'C00016'],[1,'C00003'],[1,'C01352']],
         'Products':[[1,'C00002']],
-        'RPair':{
-            'main':('C00001_C00003_C00004_C00002','main')
-        }}
+        }
     ]
     exp_comps = [
-        {'_id':'C00001', 'Formula':'C2H6',
+        {'_id':'C00016', 'Formula':'C2H6',
             'Reactant_in':['R00001','R3_12'],
             'Product_of':['R2_2']},
         {'_id':'C00002', 'Formula':'C2H6',
@@ -3313,9 +3264,11 @@ def test_add_MINE_rxns_to_KEGG_comps():
         {'_id':'C00003', 'Formula':'C2H6',
             'Reactant_in':['R2_2','R3_12'],
             'Product_of':['R1_0']},
-        {'_id':'C00004', 'Formula':'C2H6',
+        {'_id':'C01352', 'Formula':'C2H6',
             'Product_of':['R00004'],
-            'Reactant_in':['R3_12']}
+            'Reactant_in':['R3_12']},
+        {'_id':'C99999', 'Formula':'C2H6',
+            'Product_of':['R99999']}
     ]
     new_comps = add_MINE_rxns_to_KEGG_comps(comps, rxns)
     assert len(exp_comps) == len(new_comps)
@@ -3447,18 +3400,12 @@ def test_enhance_KEGG_with_MINE():
     {'Rxn_Hash': '011bbc8f35061fb116cc4cbe46285b9db340031f3d3449f02ddf228666c686ac-5ef24b4a29298e80df3e410e68928b6e-b6560c09a82d56b15c28787b9dc1b017',
     'Products': [[1, 'C01412'], [1, 'C00004'], [1, 'C00080']],
     'Reactants': [[1, 'C06142'], [1, 'C00003']],
-    'RPair': {
-        'main': ('C06142_C01412', 'main'),
-        'cofac': ('C00003_C00004_C00080', 'cofac')},
     'Operators': ['1.1.1.a'],
     '_id': 'R86e63dd5a75dedff25511e9535e77e2316e4c7af_0'
     },
     {'Rxn_Hash': '1b67a3e6edc9cb29d69e8c21af86cf42129d566f728ff721bfd50914cbae3357-5ef24b4a29298e80df3e410e68928b6e-19772c3a68c961ee657f9e206e21bd88',
     'Products': [[1, 'C06142'], [1, 'C00011']],
     'Reactants': [[1, 'C02804']],
-    'RPair': {
-        'cofac': ('C00011', 'cofac'),
-        'main': ('C02804_C06142', 'main')},
     'Operators': ['4.1.1.k'],
     '_id': 'R766e3bcdbdf841f470c146b7ad9b74ca35d5c3e6_0'}
     ]
