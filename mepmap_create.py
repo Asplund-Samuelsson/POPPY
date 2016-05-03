@@ -2936,11 +2936,14 @@ def test_remove_non_KEGG_MINE_rxns():
     assert remove_non_KEGG_MINE_rxns(rxns, comps) == [rxns[0]] + rxns[4:]
 
 
-def KEGG_rxns_from_MINE_rxns(rxns, comps):
+def KEGG_rxns_from_MINE_rxns(rxns, comps, KEGG_comp_ids):
     """Produce reactions with KEGG IDs instead of MINE IDs."""
 
-    # Set up a MINE ID to KEGG ID dictionary
-    M2K = dict([(c['_id'], c['DB_links']['KEGG']) for c in comps])
+    # Set up a MINE ID to KEGG ID dictionary - filter KEGG IDs
+    K = set(KEGG_comp_ids)
+    M2K = dict(
+    [(c['_id'], [k for k in c['DB_links']['KEGG'] if k in K]) for c in comps]
+    )
 
     # Set up a MINE ID to Cofactor status dictionary
     def is_not_connected(comp):
@@ -3068,7 +3071,13 @@ def test_KEGG_rxns_from_MINE_rxns():
         {'_id':'X1', 'DB_links':{'KEGG':['C10000']}},
         {'_id':'X2', 'DB_links':{'KEGG':['C00002']}},
         {'_id':'X3', 'DB_links':{'KEGG':['C00003']}},
-        {'_id':'X4', 'DB_links':{'KEGG':['C40000','C40001']}},
+        {'_id':'X4', 'DB_links':{'KEGG':['C40000','C40001','C99999']}},
+    ]
+    # Listing the KEGG compound IDs - note that C99999 is missing
+    kegg_comp_ids = [
+        'C10000','C10001','C20000','C30000',
+        'C30001','C40000','C40001','C00002',
+        'C00003'
     ]
     exp_rxns = [
         {'_id':'R1_0', 'Operators':['1.1.1.a'],
@@ -3144,7 +3153,7 @@ def test_KEGG_rxns_from_MINE_rxns():
             'main':('C20000_C40000','main')
         }}
     ]
-    new_rxns = KEGG_rxns_from_MINE_rxns(rxns, comps)
+    new_rxns = KEGG_rxns_from_MINE_rxns(rxns, comps, kegg_comp_ids)
     assert len(exp_rxns) == len(new_rxns)
     assert exp_rxns == new_rxns
 
@@ -3314,7 +3323,7 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
     MINE_rxns = remove_redundant_MINE_rxns(MINE_rxns)
 
     # Create a list of MINE reactions in terms of KEGG compounds
-    MINE_rxns = KEGG_rxns_from_MINE_rxns(MINE_rxns, MINE_comps)
+    MINE_rxns = KEGG_rxns_from_MINE_rxns(MINE_rxns, MINE_comps, KEGG_comp_ids)
 
     # Add the new MINE reactions to the KEGG compounds
     KEGG_comps = list(KEGG_comp_dict.values())
