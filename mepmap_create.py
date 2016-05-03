@@ -23,24 +23,43 @@ from progress import Progress
 
 # Define functions
 def allow_reaction_listing(kegg_comp, kegg_rxn):
+    """Determine whether to allow the compound to list the reaction"""
+
     # Is the compound inorganic?
     inorganic_C = ["C00011","C00288","C01353","C00237"]
     if 'Formula' in kegg_comp.keys():
         if not limit_carbon(kegg_comp, 0) or kegg_comp['_id'] in inorganic_C:
             return False
+    else:
+        # Does the compound have a formula?
+        return False
+
     # Is the compound CoA or ACP?
     if kegg_comp['_id'] in {"C00010", "C00229"}:
         return False
-    # Is the compound a cofactor or part of RP00003?
+
+    # Is the compound a cofactor?
     if "RPair" in kegg_rxn.keys():
         for rp in kegg_rxn['RPair'].items():
             if kegg_comp['_id'] in rp[1][0] and rp[1][1] == "cofac":
                 return False
-            if kegg_comp['_id'] in rp[1][0] and rp[0] == "RP00003":
-                return False
-    # Does the compound have a formula?
-    if "Formula" not in kegg_comp.keys():
-        return False
+
+    # Is the compound a nucleotide involved in a reaction with nucleotides on
+    # both reactant and product sides?
+    nucleotides = [
+        'C00002','C00008','C00020', # ATP, ADP, AMP
+        'C00075','C00015','C00105', # UTP, UDP, UMP
+        'C00044','C00035','C00144', # GTP, GDP, GMP
+        'C00063','C00112','C00055'  # CTP, CDP, CMP
+    ]
+    if kegg_comp['_id'] in nucleotides:
+        R = [c[1] for c in kegg_rxn['Reactants']]
+        P = [c[1] for c in kegg_rxn['Products']]
+        r_nucs = [k for k in R if k in nucleotides]
+        p_nucs = [k for k in P if k in nucleotides]
+        if r_nucs and p_nucs:
+            return False
+
     # If the compound passed all the tests, the reaction is free to be listed
     return True
 
@@ -59,13 +78,21 @@ def test_allow_reaction_listing():
     assert allow_reaction_listing(cpd, rxn)
 
     # ATP/ADP reaction pair should not be listed (RP00003)
-    cpd = {"_id":"C00002", "Reactions":['R1','R2']}
-    rxn = {"_id":"R1", "RPair":{"RP00003":("C00002_C00008","ligase")}}
+    cpd = {"_id":"C00002", "Reactions":['R1','R2'], 'Formula':'C10'}
+    rxn = {"_id":"R1",
+           "RPair":{"RP00003":("C00002_C00008","ligase")},
+           "Reactants":[[1,'C10000'],[1,'C00002']],
+           "Products":[[1,'C00008'],[1,'C00100']]}
     assert not allow_reaction_listing(cpd, rxn)
 
-    # ATP might be involved in other reactions
+    # A real ATP to AMP reaction
     cpd = format_KEGG_compound(get_KEGG_text("C00002"))
     rxn = format_KEGG_reaction(get_KEGG_text("R00085")) # ATP -> AMP
+    assert not allow_reaction_listing(cpd, rxn)
+
+    # Nucleotides might be involved in other reactions
+    cpd = format_KEGG_compound(get_KEGG_text("C00008"))
+    rxn = format_KEGG_reaction(get_KEGG_text("R00125")) # AppppA -> ADP
     assert allow_reaction_listing(cpd, rxn)
 
     # CoA should not be listed
@@ -106,6 +133,50 @@ def test_allow_reaction_listing():
     cpd = format_KEGG_compound(get_KEGG_text("C00139")) # Ox. ferredoxin
     rxn = format_KEGG_reaction(get_KEGG_text("R05742"))
     assert not allow_reaction_listing(cpd, rxn)
+
+    # Nucleotides taking part in a reaction with nucleotides on both sides
+    # are not allowed
+    nucleotides = [
+        'C00002','C00008','C00020', # ATP, ADP, AMP
+        'C00075','C00015','C00105', # UTP, UDP, UMP
+        'C00044','C00035','C00144', # GTP, GDP, GMP
+        'C00063','C00112','C00055'  # CTP, CDP, CMP
+    ]
+    for n1 in nucleotides:
+        for n2 in nucleotides:
+            cpd1 = {'_id':n1, 'Formula':'C10'}
+            cpd2 = {'_id':n2, 'Formula':'C10'}
+            rxn0 = {
+            '_id':'R_' + n1 + '_' + n2,
+            'Reactants':[[1,n1],[1,'C15000']],
+            'Products':[[1,n2],[1,'C15001']]
+            }
+            rxn1f = {
+            '_id':'R_' + n1,
+            'Reactants':[[1,n1],[1,'C15000']],
+            'Products':[[1,'C15001']]
+            }
+            rxn1r = {
+            '_id':'R_' + n1,
+            'Reactants':[[1,'C15000']],
+            'Products':[[1,n1],[1,'C15001']]
+            }
+            rxn2f = {
+            '_id':'R_' + n2,
+            'Reactants':[[1,n2],[1,'C15000']],
+            'Products':[[1,'C15001']]
+            }
+            rxn2r = {
+            '_id':'R_' + n2,
+            'Reactants':[[1,'C15000']],
+            'Products':[[1,n2],[1,'C15001']]
+            }
+            assert not allow_reaction_listing(cpd1, rxn0)
+            assert not allow_reaction_listing(cpd2, rxn0)
+            assert allow_reaction_listing(cpd1, rxn1f)
+            assert allow_reaction_listing(cpd1, rxn1r)
+            assert allow_reaction_listing(cpd2, rxn2f)
+            assert allow_reaction_listing(cpd2, rxn2r)
 
 
 def sort_KEGG_reactions(kegg_comp_dict, kegg_rxn_dict, verbose=False):
