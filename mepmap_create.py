@@ -34,8 +34,8 @@ def allow_reaction_listing(kegg_comp, kegg_rxn):
         # Does the compound have a formula?
         return False
 
-    # Is the compound CoA or ACP?
-    if kegg_comp['_id'] in {"C00010", "C00229"}:
+    # Is the compound CoA, ACP or SAM?
+    if kegg_comp['_id'] in {"C00010", "C00229", "C00019"}:
         return False
 
     # Is the compound a cofactor?
@@ -112,6 +112,11 @@ def test_allow_reaction_listing():
     # ACP should not be listed
     cpd = format_KEGG_compound(get_KEGG_text("C00229"))
     rxn = format_KEGG_reaction(get_KEGG_text(cpd['Reactions'][15]))
+    assert not allow_reaction_listing(cpd, rxn)
+
+    # SAM should not be listed
+    cpd = format_KEGG_compound(get_KEGG_text("C00019"))
+    rxn = format_KEGG_reaction(get_KEGG_text(cpd['Reactions'][3]))
     assert not allow_reaction_listing(cpd, rxn)
 
     # Water is often a cofactor and should not be listed
