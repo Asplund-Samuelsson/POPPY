@@ -619,6 +619,10 @@ def subnetwork_from_paths(network, paths, target_node):
     # Identify the incomplete reactions and remove them
     remove_incomplete_reactions(subnet)
 
+    # Exit with an error message if the target node was removed
+    if target_node not in subnet.node.keys():
+        sys.exit("\nError: Target node cannot be produced by the sub-network.\n")
+
     # Cut connection to start compounds in order to
     # generate terminal (leaf) reactant nodes
     # generate_termini(subnet)

@@ -45,7 +45,13 @@ def allow_reaction_listing(kegg_comp, kegg_rxn):
         "C00005" : ("C00005", "C00006"), # NADPH/NADP+
         "C00006" : ("C00005", "C00006"), # NADPH/NADP+
         "C01352" : ("C01352", "C00016"), # FADH2/FAD
-        "C00016" : ("C01352", "C00016")  # FADH2/FAD
+        "C00016" : ("C01352", "C00016"), # FADH2/FAD
+        "C00113" : ("C00113", "C01359"), # PQQ/PQQH2
+        "C01359" : ("C00113", "C01359"), # PQQ/PQQH2
+        "C00019" : ("C00019", "C00021"), # SAM/S-Adenosyl-L-homocysteine
+        "C00021" : ("C00019", "C00021"), # SAM/S-Adenosyl-L-homocysteine
+        "C00342" : ("C00342", "C00343"), # Thioredoxin/Thiredoxin disulfide
+        "C00343" : ("C00342", "C00343")  # Thioredoxin/Thiredoxin disulfide
     }
     try:
         C = cofactor_pairs[kegg_comp['_id']]
@@ -64,7 +70,8 @@ def allow_reaction_listing(kegg_comp, kegg_rxn):
         'C00002','C00008','C00020', # ATP, ADP, AMP
         'C00075','C00015','C00105', # UTP, UDP, UMP
         'C00044','C00035','C00144', # GTP, GDP, GMP
-        'C00063','C00112','C00055'  # CTP, CDP, CMP
+        'C00063','C00112','C00055', # CTP, CDP, CMP
+        'C00054','C03850','C18344'  # AXP variants
     ]
     if kegg_comp['_id'] in nucleotides:
         R = [c[1] for c in kegg_rxn['Reactants']]
@@ -112,11 +119,6 @@ def test_allow_reaction_listing():
     # ACP should not be listed
     cpd = format_KEGG_compound(get_KEGG_text("C00229"))
     rxn = format_KEGG_reaction(get_KEGG_text(cpd['Reactions'][15]))
-    assert not allow_reaction_listing(cpd, rxn)
-
-    # SAM should not be listed
-    cpd = format_KEGG_compound(get_KEGG_text("C00019"))
-    rxn = format_KEGG_reaction(get_KEGG_text(cpd['Reactions'][3]))
     assert not allow_reaction_listing(cpd, rxn)
 
     # Water is often a cofactor and should not be listed
@@ -3320,7 +3322,8 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
 
     # Download the MINE reactions listed for the MINE compounds
     s_out("Downloading MINE reactions...\n")
-    MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
+    #MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
+    MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
 
     # Download the 'X' MINE compounds listed for the reactions
     s_out("\nIdentifying cofactors...")
@@ -3463,7 +3466,9 @@ def main(infile, mine, kegg, step_limit,
     kegg_comp_dict = {} # Default
     kegg_rxn_dict = {} # Default
     if kegg:
-        kegg_comp_dict, kegg_rxn_dict = get_raw_KEGG()
+        kegg_file = '/ssd/common/db/kegg/KEGG_cpd_rxn.pickle'
+        kegg_comp_dict, kegg_rxn_dict = pickle.load(open(kegg_file, 'rb'))
+        #kegg_comp_dict, kegg_rxn_dict = get_raw_KEGG()
 
     # Acquire raw MINE dictionaries
     start_ids = [] # Default
