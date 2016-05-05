@@ -20,6 +20,7 @@ from mepmap_helpers import *
 from mepmap_origin_helpers import *
 from mepmap_KEGG_helpers import *
 from progress import Progress
+from equilibrator_query import *
 
 # Define functions
 def allow_reaction_listing(kegg_comp, kegg_rxn):
@@ -3322,8 +3323,8 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
 
     # Download the MINE reactions listed for the MINE compounds
     s_out("Downloading MINE reactions...\n")
-    #MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
-    MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
+    MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
+    #MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
 
     # Download the 'X' MINE compounds listed for the reactions
     s_out("\nIdentifying cofactors...")
@@ -3443,9 +3444,61 @@ def test_enhance_KEGG_with_MINE():
     assert exp_KEGG_rxn_dict == enh_KEGG_rxn_dict
 
 
+def KEGG_rxns_Equilibrator_filter(rxns):
+    """Remove Equilibrator-incompatible reactions"""
+
+    print("\nChecking Equilibrator compatibility...")
+
+    # Extract the compound IDs
+    comp_ids = set()
+    for rxn in rxns.values():
+        for comp_id in extract_reaction_comp_ids(rxn):
+            comp_ids.add(comp_id)
+
+    # Query Equilibrator
+    eq_results = threaded_equilibrator_gibbf([(cid,) for cid in comp_ids])
+
+    # Determine valid compounds
+    valid_comp_ids = set()
+    for query in eq_results.keys():
+        if eq_results[query]:
+            valid_comp_ids.add(query[0])
+
+    # Identify invalid reactions
+    invalid_reactions = set()
+    p = Progress(max_val=len(rxns))
+    n = 0
+    for rxn in rxns.values():
+        n += 1
+        s_out("\rIdentifying Equilibrator-incompatible reactions... " + \
+        p.to_string(n))
+        for comp_id in extract_reaction_comp_ids(rxn):
+            if comp_id not in valid_comp_ids:
+                invalid_reactions.add(rxn['_id'])
+                break
+
+    # Remove invalid reactions
+    for rxn_id in invalid_reactions:
+        del rxns[rxn_id]
+
+    s_out('\rIdentifying Equilibrator-incompatible reactions... Done. \n')
+
+def test_KEGG_rxns_Equilibrator_filter():
+    rxns = {
+    'R1':{'_id':'R1', 'Reactants':[[1,'C00011']], 'Products':[[1,'C00469']]},
+    'R2':{'_id':'R2', 'Reactants':[[1,'C00011']], 'Products':[[1,'C00229']]},
+    'R3':{'_id':'R3', 'Reactants':[[1,'C01328']], 'Products':[[1,'C06142']]}
+    }
+    exp_rxns = {
+    'R1':{'_id':'R1', 'Reactants':[[1,'C00011']], 'Products':[[1,'C00469']]}
+    }
+    KEGG_rxns_Equilibrator_filter(rxns)
+    assert rxns == exp_rxns
+
+
 # Main code block
-def main(infile, mine, kegg, step_limit,
-    comp_limit, C_limit, enhance, outfile_name):
+def main(outfile_name, infile, mine, kegg, step_limit,
+    comp_limit, C_limit, enhance, eq_filter):
 
     # Exit if a database choice has not been specified
     if not mine and not kegg:
@@ -3466,9 +3519,9 @@ def main(infile, mine, kegg, step_limit,
     kegg_comp_dict = {} # Default
     kegg_rxn_dict = {} # Default
     if kegg:
-        kegg_file = '/ssd/common/db/kegg/KEGG_cpd_rxn.pickle'
-        kegg_comp_dict, kegg_rxn_dict = pickle.load(open(kegg_file, 'rb'))
-        #kegg_comp_dict, kegg_rxn_dict = get_raw_KEGG()
+        #kegg_file = '/ssd/common/db/kegg/KEGG_cpd_rxn.pickle'
+        #kegg_comp_dict, kegg_rxn_dict = pickle.load(open(kegg_file, 'rb'))
+        kegg_comp_dict, kegg_rxn_dict = get_raw_KEGG()
 
     # Acquire raw MINE dictionaries
     start_ids = [] # Default
@@ -3489,6 +3542,10 @@ def main(infile, mine, kegg, step_limit,
         mine_comp_dict, mine_rxn_dict = enhance_KEGG_with_MINE(
             mine_comp_dict, mine_rxn_dict
         )
+
+    # Filter to equilibrator compatible reactions
+    if eq_filter and enhance:
+        KEGG_rxns_Equilibrator_filter(mine_rxn_dict)
 
     # Create the network
     network = construct_network(mine_comp_dict, mine_rxn_dict,
@@ -3550,8 +3607,12 @@ if __name__ == "__main__":
         '-e', '--enhance', action='store_true',
         help='Produce a KEGG network enhanced with MINE reactions.'
     )
+    parser.add_argument(
+        '-E', '--equilibrator_filter', action='store_true',
+        help='Remove equilibrator incompatible reactions.'
+    )
 
     args = parser.parse_args()
 
-    main(args.infile, args.mine, args.kegg, args.r, \
-    args.c, args.C, args.enhance, args.outfile)
+    main(args.outfile, args.infile, args.mine, args.kegg, args.r, \
+    args.c, args.C, args.enhance, args.equilibrator_filter)
