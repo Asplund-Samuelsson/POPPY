@@ -3323,8 +3323,8 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
 
     # Download the MINE reactions listed for the MINE compounds
     s_out("Downloading MINE reactions...\n")
-    MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
-    #MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
+    #MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
+    MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
 
     # Download the 'X' MINE compounds listed for the reactions
     s_out("\nIdentifying cofactors...")
@@ -3456,13 +3456,16 @@ def KEGG_rxns_Equilibrator_filter(rxns):
             comp_ids.add(comp_id)
 
     # Query Equilibrator
-    eq_results = threaded_equilibrator_gibbf([(cid,) for cid in comp_ids])
+    #eq_results = threaded_equilibrator_gibbf([(cid,) for cid in comp_ids])
 
     # Determine valid compounds
-    valid_comp_ids = set()
-    for query in eq_results.keys():
-        if eq_results[query]:
-            valid_comp_ids.add(query[0])
+    #valid_comp_ids = set()
+    #for query in eq_results.keys():
+    #    if eq_results[query]:
+    #        valid_comp_ids.add(query[0])
+
+    valid_file = '/ssd/common/db/equilibrator/equilibrator_compatible_KEGG_IDs.pickle'
+    valid_comp_ids = pickle.load(open(valid_file,'rb'))
 
     # Identify invalid reactions
     invalid_reactions = set()
@@ -3496,6 +3499,113 @@ def test_KEGG_rxns_Equilibrator_filter():
     assert rxns == exp_rxns
 
 
+def merge_MINE_KEGG_rxns(rxn_dict):
+    """Merge equivalent MINE reactions into KEGG reactions"""
+
+    # Define reaction comparison function
+    def rxns_equivalent(rxn1, rxn2):
+        try:
+            r1p = set([tuple(c) for c in rxn1['Products']])
+        except KeyError:
+            r1p = set()
+        try:
+            r2p = set([tuple(c) for c in rxn2['Products']])
+        except KeyError:
+            r2p = set()
+        try:
+            r1r = set([tuple(c) for c in rxn1['Reactants']])
+        except KeyError:
+            r1r = set()
+        try:
+            r2r = set([tuple(c) for c in rxn2['Reactants']])
+        except KeyError:
+            r2r = set()
+        if (r1r, r1p) == (r2r, r2p) or (r1r, r1p) == (r2p, r2r):
+            return True
+        else:
+            return False
+
+    # Set up regular expressions for separating KEGG and MINE reactions
+    is_KEGG_rxn_id = re.compile('^R[0-9]{5}$')
+    is_not_KEGG_rxn_id = re.compile('(?!^R[0-9]{5}$)')
+
+    # Iterate over reaction combinations and detect equivalent reactions
+
+    rxn_discard = set() # Reactions to discard later
+    new_KEGG_operators = {} # New operators to place in the KEGG reaction lists
+
+    n_comparisons = len(list(filter(is_KEGG_rxn_id.match, rxn_dict.keys()))) * \
+    len(list(filter(is_not_KEGG_rxn_id.match, rxn_dict.keys())))
+    p = Progress(max_val = n_comparisons, design = 'pt')
+    n = 0
+
+    for K_rxn_id in filter(is_KEGG_rxn_id.match, rxn_dict.keys()):
+        for M_rxn_id in filter(is_not_KEGG_rxn_id.match, rxn_dict.keys()):
+            n += 1
+            s_out("\rMerging MINE and KEGG reactions... %s" % p.to_string(n))
+            if rxns_equivalent(rxn_dict[K_rxn_id], rxn_dict[M_rxn_id]):
+                rxn_discard.add(M_rxn_id)
+                ops = ['M:' + op for op in rxn_dict[M_rxn_id]['Operators']]
+                try:
+                    new_KEGG_operators[K_rxn_id].extend(ops)
+                except KeyError:
+                    new_KEGG_operators[K_rxn_id] = ops
+
+    # Update the reaction dictionary
+    # 1) Delete discarded reactions
+    for rxn_id in rxn_discard:
+        del rxn_dict[rxn_id]
+
+    # 2) Extend Operator lists
+    for K_rxn_id in filter(is_KEGG_rxn_id.match, rxn_dict.keys()):
+        try:
+            new_ops = new_KEGG_operators[K_rxn_id]
+        except KeyError:
+            continue
+        try:
+            new_ops.extend(rxn_dict[K_rxn_id]['Operators'])
+        except KeyError:
+            pass
+        rxn_dict[K_rxn_id]['Operators'] = sorted(list(set(new_ops)))
+
+    print("")
+
+def test_merge_MINE_KEGG_rxns():
+    rxn_dict = {
+    'R10000':{'_id':'R10000', 'Operators':['1.1.1.2'],
+              'Reactants':[[1,'C10380'],[1,'C00183']],
+               'Products':[[1,'C01212'],[1,'C00012']]},
+    'R25c7d':{'_id':'R25c7d', 'Operators':['1.1.1.a'],
+               'Products':[[1,'C10380'],[1,'C00183']],
+              'Reactants':[[1,'C01212'],[1,'C00012']]},
+    'R20000':{'_id':'R20000', 'Operators':['3.1.4.1'],
+              'Reactants':[[1,'C00380'],[1,'C00120']],
+               'Products':[[1,'C00012'],[1,'C01212']]},
+    'Rfa4df':{'_id':'Rfa4df', 'Operators':['1.5.-1.-'],
+              'Reactants':[[1,'C00120'],[1,'C00380']],
+               'Products':[[1,'C01212'],[1,'C00012']]},
+    'R30000':{'_id':'R30000', 'Operators':['2.2.2.2'],
+              'Reactants':[[1,'C00100']],
+               'Products':[[1,'C00200']]},
+    'R198a2':{'_id':'R198a2', 'Operators':['5.4.3.c'],
+               'Products':[[1,'C10380'],[1,'C00183']],
+              'Reactants':[[1,'C00012'],[1,'C01212']]}
+    }
+    exp_dict = {
+    'R10000':{'_id':'R10000', 'Operators':['1.1.1.2','M:1.1.1.a','M:5.4.3.c'],
+              'Reactants':[[1,'C10380'],[1,'C00183']],
+               'Products':[[1,'C01212'],[1,'C00012']]},
+    'R20000':{'_id':'R20000', 'Operators':['3.1.4.1','M:1.5.-1.-'],
+              'Reactants':[[1,'C00380'],[1,'C00120']],
+               'Products':[[1,'C00012'],[1,'C01212']]},
+    'R30000':{'_id':'R30000', 'Operators':['2.2.2.2'],
+              'Reactants':[[1,'C00100']],
+               'Products':[[1,'C00200']]}
+    }
+    merge_MINE_KEGG_rxns(rxn_dict)
+    assert rxn_dict == exp_dict
+
+
 # Main code block
 def main(outfile_name, infile, mine, kegg, step_limit,
     comp_limit, C_limit, enhance, eq_filter):
@@ -3519,9 +3629,9 @@ def main(outfile_name, infile, mine, kegg, step_limit,
     kegg_comp_dict = {} # Default
     kegg_rxn_dict = {} # Default
     if kegg:
-        #kegg_file = '/ssd/common/db/kegg/KEGG_cpd_rxn.pickle'
-        #kegg_comp_dict, kegg_rxn_dict = pickle.load(open(kegg_file, 'rb'))
-        kegg_comp_dict, kegg_rxn_dict = get_raw_KEGG()
+        kegg_file = '/ssd/common/db/kegg/KEGG_cpd_rxn.pickle'
+        kegg_comp_dict, kegg_rxn_dict = pickle.load(open(kegg_file, 'rb'))
+        #kegg_comp_dict, kegg_rxn_dict = get_raw_KEGG()
 
     # Acquire raw MINE dictionaries
     start_ids = [] # Default
@@ -3546,6 +3656,10 @@ def main(outfile_name, infile, mine, kegg, step_limit,
     # Filter to equilibrator compatible reactions
     if eq_filter and enhance:
         KEGG_rxns_Equilibrator_filter(mine_rxn_dict)
+
+    # Merge MINE reactions with corresponding KEGG reactions
+    if enhance:
+        merge_MINE_KEGG_rxns(mine_rxn_dict)
 
     # Create the network
     network = construct_network(mine_comp_dict, mine_rxn_dict,
