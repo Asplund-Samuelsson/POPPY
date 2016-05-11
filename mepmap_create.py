@@ -3502,7 +3502,7 @@ def test_KEGG_rxns_Equilibrator_filter():
     assert rxns == exp_rxns
 
 
-def merge_MINE_KEGG_rxns(MINE_rxns, KEGG_rxns, n_procs=4, chunk_size=100000):
+def merge_MINE_KEGG_rxns(MINE_rxns, KEGG_rxns):
     """Merge equivalent MINE reactions into KEGG reactions or new reactions"""
 
     # Define reaction comparison function
@@ -3517,251 +3517,90 @@ def merge_MINE_KEGG_rxns(MINE_rxns, KEGG_rxns, n_procs=4, chunk_size=100000):
             r = frozenset()
         return frozenset([r, p])
 
-    def rxns_equivalent(rxn1, rxn2):
-        if stoichiometric_set(rxn1) == stoichiometric_set(rxn2):
-            return True
-        else:
-            return False
-
-    # The maximum number of processes is (mp.cpu_count - 2)
-    # This allows for some overhead for the main process and manager
-    if n_procs > mp.cpu_count() - 2:
-        if n_procs - 2 > 1:
-            n_procs = mp.cpu_count() - 2
-        else:
-            n_procs = 1
-
     # First merge MINE reactions into KEGG reactions when possible
     KEGG_indices = range(len(KEGG_rxns))
     MINE_indices = range(len(MINE_rxns))
 
-    # Calculate the total number of comparisons
-    n_comparisons = len(KEGG_indices) * len(MINE_indices)
+    # Set up progress reporting
+    N = len(KEGG_indices)*2 + len(MINE_indices)*2
+    p = Progress(max_val = N)
+    n = 0
 
-    # Define the worker
-    def worker():
-        while True:
-            rxn_discard = set()
-            new_KEGG_operators = {}
-            comparisons = work.get()
-            if comparisons is None:
-                break
-            for iK, iM in comparisons:
-                if rxns_equivalent(KEGG_rxns[iK], MINE_rxns[iM]):
-                    rxn_discard.add(iM)
-                    ops = ['M:' + op for op in MINE_rxns[iM]['Operators']]
-                    try:
-                        new_KEGG_operators[iK].extend(ops)
-                    except KeyError:
-                        new_KEGG_operators[iK] = ops
-            output.put((rxn_discard, new_KEGG_operators))
-            with lock:
-                n_work_done.value += 1
+    # Group reactions by identical stoichiometry
+    S2i = {}
 
-    with mp.Manager() as manager:
-        # Initialize Work queue in manager
-        work = manager.Queue()
-
-        # Initialize output queue in manager
-        output = manager.Queue()
-
-        # Initialize number of tasks done counter
-        n_work_done = mp.Value('i', 0)
-        lock = mp.Lock()
-
-        # Start processes
-        procs = []
-        for i in range(n_procs):
-            proc = mp.Process(target=worker)
-            procs.append(proc)
-            proc.start()
-
-        # Track progress and refill the work queue when possible
-        # Putting all comparisons at once will flood the memory
-        n_chunks = round(n_comparisons / chunk_size)
-        p = Progress(design = 'pt', max_val = n_chunks)
-        n = 0
-        for comparison in product(KEGG_indices, MINE_indices):
-            comparison = tuple(comparison)
-            # There is no chunk
-            if not n:
-                # Start a new chunk
-                chunk = [comparison]
-                n += 1
-            # The chunk should grow
-            elif n < chunk_size:
-                # Add to existing chunk
-                chunk.append(comparison)
-                n += 1
-            # The chunk is finished
-            if n == chunk_size:
-                # Wait until there is enough room on the queue
-                while work.qsize() >= n_procs:
-                    time.sleep(1)
-                # Place the chunk on the queue
-                work.put(chunk)
-                # Reset counter
-                n = 0
-                # Report progress
-                s_out("\rMerging MINE with KEGG reactions... %s" % p.to_string(n_work_done.value))
-
-        # Put the final chunk on the queue, as well as termination signals
-        work.put(chunk)
-        for proc in procs:
-            work.put(None)
-
-        # Wait until all work is done
-        while not n_work_done.value >= n_chunks:
-            s_out("\rMerging MINE with KEGG reactions... %s" % p.to_string(n_work_done.value))
-            time.sleep(1)
-
-        s_out("\rMerging MINE with KEGG reactions... %s" % p.to_string(n_work_done.value))
-
-        # Terminate the processes
-        for proc in procs:
-            if proc.is_alive():
-                proc.terminate()
-
-        # Collect output
-        rxn_discard = set() # Reactions to discard later
-        new_KEGG_operators = {} # New operators to place in the KEGG reaction lists
-        while not output.empty():
-            rxn_discard_chunk, new_KEGG_operators_chunk = output.get()
-            rxn_discard = rxn_discard.union(rxn_discard_chunk)
-            for iK in new_KEGG_operators_chunk.keys():
-                try:
-                    new_KEGG_operators[iK].extend(new_KEGG_operators_chunk[iK])
-                except KeyError:
-                    new_KEGG_operators[iK] = new_KEGG_operators_chunk[iK]
-
-    # 1) Extend Operator lists
+    # KEGG reactions
     for iK in KEGG_indices:
-        print(iK)
+        n += 1
+        s_out("\rMerging reactions... %s" % p.to_string(n))
         try:
-            new_ops = new_KEGG_operators[iK]
+            set_dict = S2i[stoichiometric_set(KEGG_rxns[iK])]
+        except KeyError:
+            set_dict = {}
+        try:
+            set_dict['K'].add(iK)
+        except KeyError:
+            set_dict['K'] = set([iK])
+        S2i[stoichiometric_set(KEGG_rxns[iK])] = set_dict
+
+    # MINE reactions
+    for iM in MINE_indices:
+        n += 1
+        s_out("\rMerging reactions... %s" % p.to_string(n))
+        try:
+            set_dict = S2i[stoichiometric_set(MINE_rxns[iM])]
+        except KeyError:
+            set_dict = {}
+        try:
+            set_dict['M'].add(iM)
+        except KeyError:
+            set_dict['M'] = set([iM])
+        S2i[stoichiometric_set(MINE_rxns[iM])] = set_dict
+
+    # Extend KEGG Operator lists
+    for iK in KEGG_indices:
+        n += 1
+        s_out("\rMerging reactions... %s" % p.to_string(n))
+        try:
+            iMs = list(S2i[stoichiometric_set(KEGG_rxns[iK])]['M'])
         except KeyError:
             continue
+        new_ops = []
+        for iM in iMs:
+            new_ops.extend(['M:' + op for op in MINE_rxns[iM]['Operators']])
         try:
             new_ops.extend(KEGG_rxns[iK]['Operators'])
         except KeyError:
             pass
         KEGG_rxns[iK]['Operators'] = sorted(list(set(new_ops)))
-        print(KEGG_rxns[iK]['Operators'])
 
-    # 2) Keep only non-discarded reactions
-    MINE_rxns = [MINE_rxns[i] for i in MINE_indices if i not in rxn_discard]
+    # Determine what MINE reactions were merged into KEGG reactions
+    MINE_discard = set()
+    for iM in MINE_indices:
+        n += 1
+        s_out("\rMerging reactions... %s" % p.to_string(n))
+        try:
+            iKs = list(S2i[stoichiometric_set(MINE_rxns[iM])]['K'])
+            MINE_discard.add(iM)
+        except KeyError:
+            pass
 
-
-    print("")
-
-
-    # Now compare MINE reactions
-    MINE_indices = range(len(MINE_rxns))
-
-    # Calculate the total number of comparisons
-    n_comparisons = 0
-    for c in combinations(MINE_indices, 2):
-        n_comparisons += 1
-
-    # Define the worker
-    def worker():
-        while True:
-            S2i_chunk = {}
-            comparisons = work.get()
-            if comparisons is None:
-                break
-            for ia, ib in comparisons:
-                # If the reactions are equivalent,
-                # add them to the stoichiometric set
-                if rxns_equivalent(MINE_rxns[ia], MINE_rxns[ib]):
-                    # Add indices to the common stoichiometric key
-                    try:
-                        S2i[stoichiometric_set(MINE_rxns[ia])].add(ia)
-                        S2i[stoichiometric_set(MINE_rxns[ia])].add(ib)
-                    except KeyError:
-                        S2i[stoichiometric_set(MINE_rxns[ia])] = set([ia, ib])
-            output.put(S2i_chunk)
-            with lock:
-                n_work_done.value += 1
-
-    with mp.Manager() as manager:
-        # Initialize Work queue in manager
-        work = manager.Queue()
-
-        # Initialize output queue in manager
-        output = manager.Queue()
-
-        # Initialize number of tasks done counter
-        n_work_done = mp.Value('i', 0)
-        lock = mp.Lock()
-
-        # Start processes
-        procs = []
-        for i in range(n_procs):
-            proc = mp.Process(target=worker)
-            procs.append(proc)
-            proc.start()
-
-        # Track progress and refill the work queue when possible
-        # Putting all comparisons at once will flood the memory
-        n_chunks = round(n_comparisons / chunk_size)
-        p = Progress(design = 'pt', max_val = n_chunks)
-        n = 0
-        for comparison in combinations(MINE_indices, 2):
-            comparison = tuple(comparison)
-            # There is no chunk
-            if not n:
-                # Start a new chunk
-                chunk = [comparison]
-                n += 1
-            # The chunk should grow
-            elif n < chunk_size:
-                # Add to existing chunk
-                chunk.append(comparison)
-                n += 1
-            # The chunk is finished
-            if n == chunk_size:
-                # Wait until there is enough room on the queue
-                while work.qsize() >= n_procs:
-                    time.sleep(1)
-                # Place the chunk on the queue
-                work.put(chunk)
-                # Reset counter
-                n = 0
-                # Report progress
-                s_out("\rMerging remaining MINE reactions... %s" % p.to_string(n_work_done.value))
-
-        # Put the final chunk on the queue, as well as termination signals
-        work.put(chunk)
-        for proc in procs:
-            work.put(None)
-
-        # Wait until all work is done
-        while not n_work_done.value >= n_chunks:
-            s_out("\rMerging remaining MINE reactions... %s" % p.to_string(n_work_done.value))
-            time.sleep(1)
-
-        s_out("\rMerging remaining MINE reactions... %s" % p.to_string(n_work_done.value))
-
-        # Terminate the processes
-        for proc in procs:
-            if proc.is_alive():
-                proc.terminate()
-
-        # Collect output
-        # Store the indices of MINE reactions to merge under stoichiometry keys
-        S2i = {}
-        while not output.empty():
-
-
-
+    # Now merge MINE reactions
     # Extract equivalent reaction index sets and sort them
-    eq_rxn_sets = sorted(list(S2i.values()), key = lambda x : min(x))
+    eq_MINE_rxn_sets = []
+    for iM in [i for i in MINE_indices if i not in MINE_discard]:
+        eq_MINE_rxn_sets.append(
+            frozenset(S2i[stoichiometric_set(MINE_rxns[iM])]['M'])
+        )
+
+    eq_MINE_rxn_sets = sorted(
+        list(set(eq_MINE_rxn_sets)), key = lambda x : min(x)
+    )
 
     # Merge reactions
     new_MINE_rxns = []
     n = 0
-    for equivalent_reaction_set in eq_rxn_sets:
+    for equivalent_reaction_set in eq_MINE_rxn_sets:
 
         # The new MINE reaction entry is based on the one with the lowest index
         base_rxn_index = min(equivalent_reaction_set)
@@ -3786,6 +3625,8 @@ def merge_MINE_KEGG_rxns(MINE_rxns, KEGG_rxns, n_procs=4, chunk_size=100000):
 
         # Append to the list of new MINE reactions
         new_MINE_rxns.append(new_MINE_rxn)
+
+    print("")
 
     # Return MINE reactions and KEGG reactions
     return (new_MINE_rxns, KEGG_rxns)
@@ -3908,7 +3749,7 @@ def test_merge_MINE_KEGG_rxns():
               'Operators':['M:1.2.-3.a','M:1.2.3.a','M:4.5.-6.-','M:4.5.6.-'],
               'MINE_id':['R10','R11','R12'],
               'Reactants':[[1,'C4']],
-               'Products':[[2,'C5'],[1,'X3']]},
+               'Products':[[2,'C9'],[1,'X3']]},
         {'_id':'RM7',
               'Operators':['M:2.8.-1.a', 'M:2.8.1.a'],
               'MINE_id':['R13','R14'],
@@ -3916,35 +3757,13 @@ def test_merge_MINE_KEGG_rxns():
               'Reactants':[[1,'C9'],[1,'X9']]}
     ]
 
-    # With one big chunk
-    MINE_rxns, KEGG_rxns = merge_MINE_KEGG_rxns(MINE_rxns, KEGG_rxns, chunk_size = 1)
+    MINE_rxns, KEGG_rxns = merge_MINE_KEGG_rxns(MINE_rxns, KEGG_rxns)
     for KEGG_rxn in KEGG_rxns:
-        print(KEGG_rxn)
         assert KEGG_rxn in exp_KR
     for MINE_rxn in MINE_rxns:
-        print(MINE_rxn)
         assert MINE_rxn in exp_MR
-    assert MINE_rxns == KEGG_rxns
-
-    # With a chunk size that ensures unequal chunk sizes
-    MINE_rxns, KEGG_rxns = merge_MINE_KEGG_rxns(MINE_rxns, KEGG_rxns, chunk_size = 19)
-    for KEGG_rxn in KEGG_rxns:
-        print(KEGG_rxn)
-        assert KEGG_rxn in exp_KR
-    for MINE_rxn in MINE_rxns:
-        print(MINE_rxn)
-        assert MINE_rxn in exp_MR
-    assert MINE_rxns == KEGG_rxns
-
-    # With many chunks
-    MINE_rxns, KEGG_rxns = merge_MINE_KEGG_rxns(MINE_rxns, KEGG_rxns, chunk_size = 100000)
-    for KEGG_rxn in KEGG_rxns:
-        print(KEGG_rxn)
-        assert KEGG_rxn in exp_KR
-    for MINE_rxn in MINE_rxns:
-        print(MINE_rxn)
-        assert MINE_rxn in exp_MR
-    assert MINE_rxns == KEGG_rxns
+    assert MINE_rxns == exp_MR
+    assert KEGG_rxns == exp_KR
 
 
 # Main code block
