@@ -3326,8 +3326,8 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
 
     # Download the MINE reactions listed for the MINE compounds
     s_out("Downloading MINE reactions...\n")
-    #MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
-    MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
+    MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
+    #MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
 
     # Download the 'X' MINE compounds listed for the reactions
     s_out("\nIdentifying cofactors...")
@@ -3355,11 +3355,15 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
     # Remove MINE reactions that have non-KEGG compounds
     MINE_rxns = remove_non_KEGG_MINE_rxns(MINE_rxns, MINE_comps)
 
-    # Remove redundant MINE reactions
-    MINE_rxns = remove_redundant_MINE_rxns(MINE_rxns)
-
     # Create a list of MINE reactions in terms of KEGG compounds
     MINE_rxns = KEGG_rxns_from_MINE_rxns(MINE_rxns, MINE_comps, KEGG_comp_ids)
+
+    # Create KEGG reaction list and remove redundant MINE reactions
+    KEGG_rxns = list(KEGG_rxn_dict.values())
+    MINE_rxns, KEGG_rxns = merge_MINE_KEGG_rxns(MINE_rxns, KEGG_rxns)
+
+    # Construct a new KEGG reaction dictionary from the KEGG reaction list
+    KEGG_rxn_dict = dict(zip([rxn['_id'] for rxn in KEGG_rxns], KEGG_rxns))
 
     # Add the new MINE reactions to the KEGG compounds
     KEGG_comps = list(KEGG_comp_dict.values())
@@ -3409,14 +3413,12 @@ def test_enhance_KEGG_with_MINE():
 
     # This is the expected MINE data (butanol from butanal or hydroxypentanoate)
     MINE_rxns = [
-    {'Rxn_Hash': '011bbc8f35061fb116cc4cbe46285b9db340031f3d3449f02ddf228666c686ac-5ef24b4a29298e80df3e410e68928b6e-b6560c09a82d56b15c28787b9dc1b017',
-    'Products': [[1, 'C01412'], [1, 'C00004'], [1, 'C00080']],
+    {'Products': [[1, 'C01412'], [1, 'C00004'], [1, 'C00080']],
     'Reactants': [[1, 'C06142'], [1, 'C00003']],
     'Operators': ['1.1.1.a'],
     '_id': 'R86e63dd5a75dedff25511e9535e77e2316e4c7af_0'
     },
-    {'Rxn_Hash': '1b67a3e6edc9cb29d69e8c21af86cf42129d566f728ff721bfd50914cbae3357-5ef24b4a29298e80df3e410e68928b6e-19772c3a68c961ee657f9e206e21bd88',
-    'Products': [[1, 'C06142'], [1, 'C00011']],
+    {'Products': [[1, 'C06142'], [1, 'C00011']],
     'Reactants': [[1, 'C02804']],
     'Operators': ['4.1.1.k'],
     '_id': 'R766e3bcdbdf841f470c146b7ad9b74ca35d5c3e6_0'}
@@ -3424,18 +3426,25 @@ def test_enhance_KEGG_with_MINE():
 
     # The expected KEGG reaction dictionary
     exp_KEGG_rxn_dict = deepcopy(KEGG_rxn_dict)
-    exp_KEGG_rxn_dict[MINE_rxns[0]['_id']] = MINE_rxns[0]
-    exp_KEGG_rxn_dict[MINE_rxns[1]['_id']] = MINE_rxns[1]
+    # It is expected that the second MINE reaction will be included under a new
+    # ID, and the first MINE reaction will be merged with the already existing
+    # KEGG reaction
+
+    # Addition of the second MINE reaction
+    exp_KEGG_rxn_dict['RM1'] = MINE_rxns[1]
+    exp_KEGG_rxn_dict['RM1']['MINE_id'] = [MINE_rxns[1]['_id']]
+    exp_KEGG_rxn_dict['RM1']['Operators'] = sorted(['M:' + o for o in MINE_rxns[1]['Operators']])
+    exp_KEGG_rxn_dict['RM1']['_id'] = 'RM1'
+
+    # Merger of the first MINE reaction
+    exp_KEGG_rxn_dict['R03544']['Operators'].extend(['M:1.1.-1.a','M:1.1.1.a'])
+    exp_KEGG_rxn_dict['R03544']['Operators'] = sorted(exp_KEGG_rxn_dict['R03544']['Operators'])
 
     # The expected KEGG compound dictionary
     exp_KEGG_comp_dict = deepcopy(KEGG_comp_dict)
 
-    exp_KEGG_comp_dict['C06142']['Product_of'].append(MINE_rxns[1]['_id'])
-    exp_KEGG_comp_dict['C06142']['Reactant_in'] = [MINE_rxns[0]['_id']]
-
-    exp_KEGG_comp_dict['C01412']['Product_of'] = [MINE_rxns[0]['_id']]
-
-    exp_KEGG_comp_dict['C02804']['Reactant_in'] = [MINE_rxns[1]['_id']]
+    exp_KEGG_comp_dict['C06142']['Product_of'].append('RM1')
+    exp_KEGG_comp_dict['C02804']['Reactant_in'] = ['RM1']
 
     # Produce enhanced KEGG dictionaries
     enh_KEGG_comp_dict, enh_KEGG_rxn_dict = enhance_KEGG_with_MINE(
@@ -3816,10 +3825,6 @@ def main(outfile_name, infile, mine, kegg, step_limit,
     # Filter to equilibrator compatible reactions
     if eq_filter and enhance:
         KEGG_rxns_Equilibrator_filter(mine_rxn_dict)
-
-    # Merge MINE reactions with corresponding KEGG reactions
-    if enhance:
-        merge_MINE_KEGG_rxns(mine_rxn_dict)
 
     # Create the network
     network = construct_network(mine_comp_dict, mine_rxn_dict,
