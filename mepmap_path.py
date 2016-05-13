@@ -640,8 +640,14 @@ def subnetwork_from_paths(network, paths, target_node):
         set(subnet.nodes()).union(nodes_being_produced(subnet))
     )
 
-    # Identify the incomplete reactions and remove them
-    remove_incomplete_reactions(subnet)
+    n_removed = 1
+    while n_removed:
+        n_before = len(subnet)
+        # Identify the incomplete reactions and remove them
+        remove_incomplete_reactions(subnet)
+        # Reduce to the connected component
+        subnet = subnet.subgraph(digraph_connected_component(subnet, target_node))
+        n_removed = n_before - len(subnet)
 
     # Exit with an error message if the target node was removed
     if target_node not in subnet.nodes():
@@ -651,8 +657,7 @@ def subnetwork_from_paths(network, paths, target_node):
     # generate terminal (leaf) reactant nodes
     # generate_termini(subnet)
 
-    # Reduce to the connected component
-    subnet = subnet.subgraph(digraph_connected_component(subnet, target_node))
+
 
     s_out(" Done.\n")
 
@@ -777,6 +782,11 @@ def paths_to_pathways(network, paths, target_node):
 
     print("\nEnumerating pathways...")
 
+    # Determine compounds nodes available in the subnetwork
+    start_comp_nodes = find_start_comp_nodes(network) # Start compounds
+    prod_comp_nodes = nodes_being_produced(subnet)
+    tot_comp = start_comp_nodes.union(prod_comp_nodes)
+
     # Filter the supplied paths to those that are present in the subnetwork
     paths_filtered = list(filter(lambda x : path_in_network(x, subnet), paths))
 
@@ -806,9 +816,6 @@ def paths_to_pathways(network, paths, target_node):
                         segments[c_node].add(tuple(segment + [c_node]))
                     except KeyError:
                         segments[c_node] = set([tuple(segment + [c_node])])
-
-    # Determine start compounds
-    start_comp_nodes = find_start_comp_nodes(network)
 
     # Storage container for finished pathways
     finished_pathways = set()
@@ -849,8 +856,14 @@ def paths_to_pathways(network, paths, target_node):
 
             # Construct sets of complementary segments that will satisfy the
             # current missing compound nodes
-            for complement in product(*[segments[i] for i in missing]):
-                unfinished_pathways.add(frozenset(set(path).union(*complement)))
+            try:
+                for complement in product(*[segments[i] for i in missing]):
+                    unfinished_pathways.add(
+                        frozenset(set(path).union(*complement))
+                    )
+            except KeyError:
+                # If a complement cannot be found, discard the pathway
+                pass
 
         # Report progress
         n_done = len(finished_pathways)
