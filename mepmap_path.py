@@ -762,8 +762,16 @@ def format_graphml(network, subnet):
     return outnet
 
 
-def paths_to_pathways(network, paths, target_node):
+def paths_to_pathways(network, paths, target_node, n_procs=4):
     """Enumerate complete branched pathways capable of producing the target"""
+
+    # The maximum number of processes is (mp.cpu_count - 2)
+    # This allows for some overhead for the main process and manager
+    if n_procs > mp.cpu_count() - 2:
+        if n_procs - 2 > 1:
+            n_procs = mp.cpu_count() - 2
+        else:
+            n_procs = 1
 
     # Function for determining whether a path is part of a network
     def path_in_network(path, network):
@@ -817,13 +825,44 @@ def paths_to_pathways(network, paths, target_node):
                     except KeyError:
                         segments[c_node] = set([tuple(segment + [c_node])])
 
+    # Define a worker
+    def worker():
+        while True:
+            pathnet = work.get()
+            if work is None:
+                break
+            pathnet_cycle_test = pathnet.copy()
+            generate_termini(pathnet_cycle_test)
+            if nx.is_directed_acyclic_graph(pathnet_cycle_test):
+                output.append(frozenset(pathnet.nodes()))
+                n_rxn = count_reactions(pathnet)
+                with lock:
+                    max_length.value = max(max_length.value, n_rxn)
+            with lock:
+                n_work_done.value += 1
+
     # Storage container for finished pathways
     finished_pathways = set()
     unfinished_pathways = set([frozenset(path) for path in paths_filtered])
 
+    # Initialize mp manager
+    manager = mp.Manager()
+    output = manager.list()
+    work = manager.Queue()
+    n_work_done = mp.Value('i', 0)
+    max_length = mp.Value('i', 0)
+    lock = mp.Lock()
+    n_work = 0
+
+    # Start processes
+    procs = []
+    for i in range(n_procs):
+        p = mp.Process(target=worker)
+        procs.append(p)
+        p.start()
+
     # Progress setup
     p = Progress(design='s')
-    max_length = 0
     p_form = '{0} Finished: {1:<12} Unfinished: {2:<10} Most reactions: {3}'
 
     # Iterate through unfinished pathways
@@ -835,9 +874,6 @@ def paths_to_pathways(network, paths, target_node):
         # Extract the paths sub-network
         pathnet = network.subgraph(path)
 
-        # Calculate the length of the longest pathway so far
-        max_length = max(max_length, count_reactions(pathnet))
-
         # Determine what compounds are produced by the path
         cpd_prod = nodes_being_produced(pathnet)
 
@@ -846,7 +882,9 @@ def paths_to_pathways(network, paths, target_node):
 
         # Check if the path is complete on its own
         if cpd_cons.issubset(cpd_prod.union(start_comp_nodes)):
-            finished_pathways.add(frozenset(path))
+            # If it is, put it on the queue for acyclicity testing
+            n_work += 1
+            work.put(pathnet)
 
         # If not, add all combinations of segments that might complement it
         else:
@@ -866,14 +904,31 @@ def paths_to_pathways(network, paths, target_node):
                 pass
 
         # Report progress
-        n_done = len(finished_pathways)
+        n_done = len(output)
         n_left = len(unfinished_pathways)
-        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, max_length)
+        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, max_length.value)
         s_out(p_msg)
+
+    # Wait until all work is done
+    while n_work_done.value != n_work:
+
+        # Report progress
+        n_done = len(set(output))
+        n_left = len(unfinished_pathways)
+        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, max_length.value)
+        s_out(p_msg)
+
+        # Wait a bit
+        time.sleep(1)
+
+    # Terminate the processes
+    for p in procs:
+        if p.is_alive():
+            p.terminate()
 
     print("")
 
-    return finished_pathways
+    return set(output)
 
 def test_paths_to_pathways():
     # Set up testing network - Same as for Identifyfind_branch_nodes
@@ -1287,7 +1342,7 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
 
     # Enumerate pathways and save results
     if outfile_name:
-        pathways = paths_to_pathways(network, paths, target_node)
+        pathways = paths_to_pathways(network, paths, target_node, n_procs)
         s_out("\nWriting results to pickle...")
         pickle.dump(pathways, open(outfile_name, 'wb'))
         s_out(" Done.\n")
