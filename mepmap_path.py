@@ -10,8 +10,10 @@ import time
 from datetime import timedelta as delta
 import threading
 import re
+from itertools import product
 
 # Import scripts
+from progress import Progress
 import mineclient3 as mc
 from mepmap_origin_helpers import *
 from mepmap_helpers import *
@@ -20,9 +22,9 @@ from mepmap_helpers import *
 def count_reactions(network):
     """Count the number of unique reactions in a network."""
     rxns = set()
-    for node in network.nodes(data=True):
-        if node[1]['type'] != 'c':
-            rxns.add(node[1]['mid'])
+    for n in network.nodes():
+        if network.node[n]['type'] != 'c':
+            rxns.add(network.node[n]['mid'])
     return len(rxns)
 
 def test_count_reactions():
@@ -302,6 +304,28 @@ def test_nodes_being_produced():
     G.node[40]['c'] = set([5])
 
     assert nodes_being_produced(G) == set([1,2,3,4,5])
+
+
+def nodes_being_consumed(network):
+    """Create set of compound nodes consumed by the reactions in the network."""
+    consumed_nodes = set()
+    for node in network.nodes():
+        if network.node[node]['type'] in {'rf','rr'}:
+            consumed_nodes = consumed_nodes.union(network.node[node]['c'])
+    return consumed_nodes
+
+def test_nodes_being_consumed():
+    G = nx.DiGraph()
+    G.add_nodes_from([1,2,3], type='c')
+    G.add_nodes_from([10,20], type='rf')
+    G.add_nodes_from([30,40], type='rr')
+    G.add_node(50, type='pf', c=set([1]))
+    G.node[10]['c'] = set([1,2])
+    G.node[20]['c'] = set([2,3])
+    G.node[30]['c'] = set([4])
+    G.node[40]['c'] = set([5])
+
+    assert nodes_being_consumed(G) == set([1,2,3,4,5])
 
 
 def remove_incomplete_reactions(network):
@@ -620,7 +644,7 @@ def subnetwork_from_paths(network, paths, target_node):
     remove_incomplete_reactions(subnet)
 
     # Exit with an error message if the target node was removed
-    if target_node not in subnet.node.keys():
+    if target_node not in subnet.nodes():
         sys.exit("\nError: Target node cannot be produced by the sub-network.\n")
 
     # Cut connection to start compounds in order to
@@ -734,8 +758,109 @@ def format_graphml(network, subnet):
 
 
 def paths_to_pathways(network, paths, target_node):
-    # Code here
-    return None
+    """Enumerate complete branched pathways capable of producing the target"""
+
+    # Function for determining whether a path is part of a network
+    def path_in_network(path, network):
+        for i in range(1, len(path)):
+            n = path[i]
+            if n in network.nodes():
+                predecessors = network.predecessors(n)
+            else:
+                predecessors = []
+            if path[i-1] not in predecessors:
+                return False
+        return True
+
+    # Construct a subnetwork
+    subnet = subnetwork_from_paths(network, paths, target_node)
+
+    print("\nEnumerating pathways...")
+
+    # Filter the supplied paths to those that are present in the subnetwork
+    paths_filtered = list(filter(lambda x : path_in_network(x, subnet), paths))
+
+    # Generate a dictionary with path segments producing the key node
+    segments = {}
+
+    # Go through all filtered paths
+    for path in paths_filtered:
+
+        # Iterate over the elements of the path
+        for element in enumerate(path):
+            i = element[0]
+            n = element[1]
+
+            # Check if product node
+            if subnet.node[n]['type'] in {'pf','pr'}:
+
+                # Construct the segment
+                segment = path[:i+1]
+
+                # Iterate over products
+                for c_node in subnet.node[n]['c']:
+
+                    # Add the segment to every key representing a node
+                    # it can produce
+                    try:
+                        segments[c_node].add(tuple(segment + [c_node]))
+                    except KeyError:
+                        segments[c_node] = set([tuple(segment + [c_node])])
+
+    # Determine start compounds
+    start_comp_nodes = find_start_comp_nodes(network)
+
+    # Storage container for finished pathways
+    finished_pathways = set()
+    unfinished_pathways = set([frozenset(path) for path in paths_filtered])
+
+    # Progress setup
+    p = Progress(design='s')
+    max_length = 0
+    p_form = '{0} Finished: {1:<12} Unfinished: {2:<10} Most reactions: {3}'
+
+    # Iterate through unfinished pathways
+    while unfinished_pathways:
+
+        # Pop a path off the set of unfinished pathways
+        path = set(unfinished_pathways.pop())
+
+        # Extract the paths sub-network
+        pathnet = network.subgraph(path)
+
+        # Calculate the length of the longest pathway so far
+        max_length = max(max_length, count_reactions(pathnet))
+
+        # Determine what compounds are produced by the path
+        cpd_prod = nodes_being_produced(pathnet)
+
+        # Determine what compounds are consumed by the path
+        cpd_cons = nodes_being_consumed(pathnet)
+
+        # Check if the path is complete on its own
+        if cpd_cons.issubset(cpd_prod.union(start_comp_nodes)):
+            finished_pathways.add(frozenset(path))
+
+        # If not, add all combinations of segments that might complement it
+        else:
+
+            # Identify the missing compound nodes
+            missing = cpd_cons - cpd_prod - start_comp_nodes
+
+            # Construct sets of complementary segments that will satisfy the
+            # current missing compound nodes
+            for complement in product(*[segments[i] for i in missing]):
+                unfinished_pathways.add(frozenset(set(path).union(*complement)))
+
+        # Report progress
+        n_done = len(finished_pathways)
+        n_left = len(unfinished_pathways)
+        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, max_length)
+        s_out(p_msg)
+
+    print("")
+
+    return finished_pathways
 
 def test_paths_to_pathways():
     # Set up testing network - Same as for Identifyfind_branch_nodes
@@ -798,7 +923,7 @@ def test_paths_to_pathways():
     G.node[301]['type'] = 'rf'
     G.node[301]['c'] = set([20])
     G.node[302]['type'] = 'pf'
-    G.node[302]['c'] = set([6])
+    G.node[302]['c'] = set([7])
 
     # One adding an additional root node and a route beginning in 5
     G.add_path([5,401,402,40,403,404,13])
@@ -823,21 +948,32 @@ def test_paths_to_pathways():
     G.node[502]['type'] = 'pr'
     G.node[502]['c'] = set([12])
 
+    # Add 'mids'
+    mids = [
+        (107,'R1'), (108,'R1'), (109,'R2'), (110,'R2'), (401,'R3'), (402,'R3'),
+        (201,'R4'), (202,'R4'), (301,'R5'), (302,'R5'), (101,'R6'), (102,'R6'),
+        (103,'R7'), (104,'R7'), (113,'R8'), (114,'R8'), (403,'R9'), (404,'R9'),
+        (501,'Ra'), (502,'Ra'), (105,'Rb'), (106,'Rb'), (111,'Rc'), (112,'Rc'),
+        (115,'Rd'), (116,'Rd')
+    ]
+    for m in mids:
+        G.node[m[0]]['mid'] = m[1]
+
     # These are the complete sets of nodes representing branched pathways
     req_1 = set([7,111,112,11,115,116,13,12,114,113,9,8,109,110,107,108])
-    expected_branched_paths = [
-    set([101,102,3,105,106]).union(req_1),
-    set([103,104,3,105,106]).union(req_1),
-    set([301,302]).union(req_1),
-    set([201,202,6,101,102,3,105,106]).union(req_1),
-    set([201,202,6,103,104,3,105,106]).union(req_1),
-    set([201,202,6,301,302]).union(req_1),
-    set([401,402,40,403,404,13])
-    ]
+    expected_branched_paths = {
+    frozenset(set([101,102,3,105,106]).union(req_1)),
+    frozenset(set([103,104,3,105,106]).union(req_1)),
+    frozenset(set([301,302]).union(req_1)),
+    frozenset(set([201,202,6,101,102,3,105,106]).union(req_1)),
+    frozenset(set([201,202,6,103,104,3,105,106]).union(req_1)),
+    frozenset(set([201,202,6,301,302]).union(req_1)),
+    frozenset([401,402,40,403,404,13])
+    }
 
     # Letting the automated functions produce a result
-    path_bins = generate_paths(G, 13, 5, quiet=True)
-    output_branched_paths = paths_to_pathways(G, path_bins, n_procs=2)
+    paths = generate_paths(G, 13, 5, quiet=True)
+    output_branched_paths = paths_to_pathways(G, paths, 13)
 
     paths_equal = True
     missing = []
@@ -881,13 +1017,23 @@ def test_paths_to_pathways():
         if N.node[node]['type'] in {'pf','pr'}:
             N.node[node]['c'] = set(N.successors(node))
 
-    N_expected_paths = [
-    set([101,102,2,201,202,5,401,402,6,3,301,302,4]),
-    set([101,102,2,201,202,5,401,402,6,501,502,4])
+    # Add 'mids'
+    mids = [
+        (101,'R1'), (102,'R1'), (103,'R2'), (104,'R2'), (201,'R3'), (202,'R3'),
+        (203,'R4'), (204,'R4'), (301,'R5'), (302,'R5'), (303,'R6'), (304,'R6'),
+        (401,'R7'), (402,'R7'), (403,'R8'), (404,'R8'), (501,'R9'), (502,'R9'),
+        (503,'Ra'), (504,'Ra')
     ]
+    for m in mids:
+        N.node[m[0]]['mid'] = m[1]
 
-    path_bins = generate_paths(N, 6, 5, quiet=True)
-    output_branched_paths = paths_to_pathways(N, path_bins, n_procs=2)
+    N_expected_paths = {
+    frozenset([101,102,2,201,202,5,401,402,6,3,301,302,4]),
+    frozenset([101,102,2,201,202,5,401,402,6,501,502,4])
+    }
+
+    paths = generate_paths(N, 6, 5, quiet=True)
+    output_branched_paths = paths_to_pathways(N, paths, 6)
 
     paths_equal = True
     missing = []
@@ -907,7 +1053,6 @@ def test_paths_to_pathways():
 
     assert paths_equal
     assert len(N_expected_paths) == len(output_branched_paths)
-
 
 
 def parse_compound(compound, network):
@@ -1116,6 +1261,7 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
     if target_node == None:
         sys.exit("Error: Target node was not found. Check compound '" + \
         compound + "'.\n")
+
     paths = generate_paths(network, target_node, reaction_limit, n_procs)
 
     # Save sub-network graphml
@@ -1126,10 +1272,11 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
         nx.write_graphml(subnet, sub_network_out)
         s_out(" Done.\n")
 
-    # Save results
+    # Enumerate pathways and save results
     if outfile_name:
+        pathways = paths_to_pathways(network, paths, target_node)
         s_out("\nWriting results to pickle...")
-        pickle.dump(paths, open(outfile_name, 'wb'))
+        pickle.dump(pathways, open(outfile_name, 'wb'))
         s_out(" Done.\n")
 
 

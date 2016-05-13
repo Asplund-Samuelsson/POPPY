@@ -3326,8 +3326,8 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
 
     # Download the MINE reactions listed for the MINE compounds
     s_out("Downloading MINE reactions...\n")
-    MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
-    #MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
+    #MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
+    MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
 
     # Download the 'X' MINE compounds listed for the reactions
     s_out("\nIdentifying cofactors...")
