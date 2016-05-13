@@ -121,14 +121,6 @@ def generate_paths(network, target_node, reaction_limit, n_procs=1, quiet=False)
     if not quiet:
         s_out("Generating paths...\n")
 
-    # The maximum number of processes is (mp.cpu_count - 2)
-    # This allows for some overhead for the main process and manager
-    if n_procs > mp.cpu_count() - 2:
-        if n_procs - 2 > 1:
-            n_procs = mp.cpu_count() - 2
-        else:
-            n_procs = 1
-
     # Define the worker
     def worker():
         while True:
@@ -648,16 +640,9 @@ def subnetwork_from_paths(network, paths, target_node):
         # Reduce to the connected component
         subnet = subnet.subgraph(digraph_connected_component(subnet, target_node))
         n_removed = n_before - len(subnet)
-
-    # Exit with an error message if the target node was removed
-    if target_node not in subnet.nodes():
-        sys.exit("\nError: Target node cannot be produced by the sub-network.\n")
-
-    # Cut connection to start compounds in order to
-    # generate terminal (leaf) reactant nodes
-    # generate_termini(subnet)
-
-
+        # Exit with an error message if the target node was removed
+        if target_node not in subnet.nodes():
+            sys.exit("\nError: Target node cannot be produced by the sub-network.\n")
 
     s_out(" Done.\n")
 
@@ -762,16 +747,8 @@ def format_graphml(network, subnet):
     return outnet
 
 
-def paths_to_pathways(network, paths, target_node, n_procs=4):
+def paths_to_pathways(network, paths, target_node):
     """Enumerate complete branched pathways capable of producing the target"""
-
-    # The maximum number of processes is (mp.cpu_count - 2)
-    # This allows for some overhead for the main process and manager
-    if n_procs > mp.cpu_count() - 2:
-        if n_procs - 2 > 1:
-            n_procs = mp.cpu_count() - 2
-        else:
-            n_procs = 1
 
     # Function for determining whether a path is part of a network
     def path_in_network(path, network):
@@ -825,50 +802,15 @@ def paths_to_pathways(network, paths, target_node, n_procs=4):
                     except KeyError:
                         segments[c_node] = set([tuple(segment + [c_node])])
 
-    # Define a worker
-    def worker():
-        while True:
-            work_chunk = work.get()
-            if work_chunk is None:
-                break
-            n_done = 0
-            for pathnet in work_chunk:
-                pathnet_cycle_test = pathnet.copy()
-                generate_termini(pathnet_cycle_test)
-                if nx.is_directed_acyclic_graph(pathnet_cycle_test):
-                    output.append(frozenset(pathnet.nodes()))
-                    n_rxn = count_reactions(pathnet)
-                    with lock:
-                        max_length.value = max(max_length.value, n_rxn)
-                n_done += 1
-            with lock:
-                n_work_done.value += n_done
-
     # Storage container for finished pathways
+    finished_pathways = set()
+    detected_cycles = set()
     unfinished_pathways = set([frozenset(path) for path in paths_filtered])
 
-    # Initialize mp manager
-    manager = mp.Manager()
-    output = manager.list()
-    work = manager.Queue()
-    n_work_done = mp.Value('i', 0)
-    max_length = mp.Value('i', 0)
-    lock = mp.Lock()
-    n_work = 0
-
-    # Start processes
-    procs = []
-    for i in range(n_procs):
-        p = mp.Process(target=worker)
-        procs.append(p)
-        p.start()
-
     # Progress setup
+    max_length = 0
     p = Progress(design='s')
     p_form = '{0} Finished: {1:<12} Unfinished: {2:<10} Most reactions: {3}'
-
-    # Prepare the first work chunk
-    work_chunk = []
 
     # Iterate through unfinished pathways
     while unfinished_pathways:
@@ -876,78 +818,63 @@ def paths_to_pathways(network, paths, target_node, n_procs=4):
         # Pop a path off the set of unfinished pathways
         path = set(unfinished_pathways.pop())
 
-        # Extract the paths sub-network
-        pathnet = network.subgraph(path)
+        # Check if the pathway has any known cycles
+        if not sum([c.issubset(pathnet.nodes()) for c in detected_cycles]):
 
-        # Determine what compounds are produced by the path
-        cpd_prod = nodes_being_produced(pathnet)
+            # Extract the paths sub-network
+            pathnet = subnet.subgraph(path)
 
-        # Determine what compounds are consumed by the path
-        cpd_cons = nodes_being_consumed(pathnet)
+            # Determine what compounds are produced by the path
+            cpd_prod = nodes_being_produced(pathnet)
 
-        # Check if the path is complete on its own
-        if cpd_cons.issubset(cpd_prod.union(start_comp_nodes)):
-            # If it is, put it on the queue for acyclicity testing
-            n_work += 1
-            work_chunk.append(pathnet)
-            if len(work_chunk) < 100:
-                pass
+            # Determine what compounds are consumed by the path
+            cpd_cons = nodes_being_consumed(pathnet)
+
+            # Check if the path is complete on its own
+            if cpd_cons.issubset(cpd_prod.union(start_comp_nodes)):
+
+                # Make a copy for cycle identification
+                path_c = pathnet.copy()
+
+                # Cut off start compounds to allow benign cycles
+                generate_termini(path_c)
+
+                # Identify cycles
+                cycles = set([frozenset(c) for c in nx.simple_cycles(path_c)])
+                # Cycles are indicative of compounds that cannot be produced
+                # de novo by the pathway, but enter due to a bootstrap effect
+                if cycles:
+                    detected_cycles = detected_cycles.union(cycles)
+                else:
+                    max_length = max(max_length, count_reactions(pathnet))
+                    finished_pathways.add(frozenset(path))
+
+            # If not, add all combinations of segments that might complement it
             else:
-                work.put(work_chunk)
-                work_chunk = []
 
-        # If not, add all combinations of segments that might complement it
-        else:
+                # Identify the missing compound nodes
+                missing = cpd_cons - cpd_prod - start_comp_nodes
 
-            # Identify the missing compound nodes
-            missing = cpd_cons - cpd_prod - start_comp_nodes
-
-            # Construct sets of complementary segments that will satisfy the
-            # current missing compound nodes
-            try:
-                for complement in product(*[segments[i] for i in missing]):
-                    unfinished_pathways.add(
-                        frozenset(set(path).union(*complement))
-                    )
-            except KeyError:
-                # If a complement cannot be found, discard the pathway
-                pass
+                # Construct sets of complementary segments that will satisfy the
+                # current missing compound nodes
+                try:
+                    for complement in product(*[segments[i] for i in missing]):
+                        unfinished_pathways.add(
+                            frozenset(set(path).union(*complement))
+                        )
+                except KeyError:
+                    # If a complement cannot be found, discard the pathway
+                    pass
 
         # Report progress
-        n_done = len(set(output))
+        n_done = len(finished_pathways)
         n_left = len(unfinished_pathways)
-        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, max_length.value)
+        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, max_length)
         s_out(p_msg)
-
-    # Place the final work chunk on the queue
-    work.put(work_chunk)
-
-    # Wait until all work is done
-    while n_work_done.value != n_work:
-
-        # Report progress
-        n_done = len(set(output))
-        n_left = len(unfinished_pathways)
-        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, max_length.value)
-        s_out(p_msg)
-
-        # Wait a bit
-        time.sleep(1)
-
-    # Place stop signals on queue
-    for i in range(n_procs):
-        work.put(None)
-
-    time.sleep(5)
-
-    # Terminate the processes
-    for p in procs:
-        if p.is_alive():
-            p.terminate()
 
     print("")
 
-    return set(output)
+    return finished_pathways
 
 def test_paths_to_pathways():
     # Set up testing network - Same as for Identifyfind_branch_nodes
@@ -1361,7 +1288,7 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
 
     # Enumerate pathways and save results
     if outfile_name:
-        pathways = paths_to_pathways(network, paths, target_node, n_procs)
+        pathways = paths_to_pathways(network, paths, target_node)
         s_out("\nWriting results to pickle...")
         pickle.dump(pathways, open(outfile_name, 'wb'))
         s_out(" Done.\n")
