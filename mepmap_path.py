@@ -828,21 +828,23 @@ def paths_to_pathways(network, paths, target_node, n_procs=4):
     # Define a worker
     def worker():
         while True:
-            pathnet = work.get()
-            if work is None:
+            work_chunk = work.get()
+            if work_chunk is None:
                 break
-            pathnet_cycle_test = pathnet.copy()
-            generate_termini(pathnet_cycle_test)
-            if nx.is_directed_acyclic_graph(pathnet_cycle_test):
-                output.append(frozenset(pathnet.nodes()))
-                n_rxn = count_reactions(pathnet)
-                with lock:
-                    max_length.value = max(max_length.value, n_rxn)
+            n_done = 0
+            for pathnet in work_chunk:
+                pathnet_cycle_test = pathnet.copy()
+                generate_termini(pathnet_cycle_test)
+                if nx.is_directed_acyclic_graph(pathnet_cycle_test):
+                    output.append(frozenset(pathnet.nodes()))
+                    n_rxn = count_reactions(pathnet)
+                    with lock:
+                        max_length.value = max(max_length.value, n_rxn)
+                n_done += 1
             with lock:
-                n_work_done.value += 1
+                n_work_done.value += n_done
 
     # Storage container for finished pathways
-    finished_pathways = set()
     unfinished_pathways = set([frozenset(path) for path in paths_filtered])
 
     # Initialize mp manager
@@ -865,6 +867,9 @@ def paths_to_pathways(network, paths, target_node, n_procs=4):
     p = Progress(design='s')
     p_form = '{0} Finished: {1:<12} Unfinished: {2:<10} Most reactions: {3}'
 
+    # Prepare the first work chunk
+    work_chunk = []
+
     # Iterate through unfinished pathways
     while unfinished_pathways:
 
@@ -884,7 +889,12 @@ def paths_to_pathways(network, paths, target_node, n_procs=4):
         if cpd_cons.issubset(cpd_prod.union(start_comp_nodes)):
             # If it is, put it on the queue for acyclicity testing
             n_work += 1
-            work.put(pathnet)
+            work_chunk.append(pathnet)
+            if len(work_chunk) < 100:
+                pass
+            else:
+                work.put(work_chunk)
+                work_chunk = []
 
         # If not, add all combinations of segments that might complement it
         else:
@@ -904,10 +914,13 @@ def paths_to_pathways(network, paths, target_node, n_procs=4):
                 pass
 
         # Report progress
-        n_done = len(output)
+        n_done = len(set(output))
         n_left = len(unfinished_pathways)
         p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, max_length.value)
         s_out(p_msg)
+
+    # Place the final work chunk on the queue
+    work.put(work_chunk)
 
     # Wait until all work is done
     while n_work_done.value != n_work:
@@ -920,6 +933,12 @@ def paths_to_pathways(network, paths, target_node, n_procs=4):
 
         # Wait a bit
         time.sleep(1)
+
+    # Place stop signals on queue
+    for i in range(n_procs):
+        work.put(None)
+
+    time.sleep(5)
 
     # Terminate the processes
     for p in procs:
