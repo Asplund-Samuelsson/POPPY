@@ -765,21 +765,34 @@ def paths_to_pathways(network, paths, target_node):
     # Construct a subnetwork
     subnet = subnetwork_from_paths(network, paths, target_node)
 
-    print("\nEnumerating pathways...")
-
     # Determine compounds nodes available in the subnetwork
     start_comp_nodes = find_start_comp_nodes(network) # Start compounds
     prod_comp_nodes = nodes_being_produced(subnet)
     tot_comp = start_comp_nodes.union(prod_comp_nodes)
 
     # Filter the supplied paths to those that are present in the subnetwork
-    paths_filtered = list(filter(lambda x : path_in_network(x, subnet), paths))
+    paths_filtered = []
+    p = Progress(design = 'pt', max_val = len(paths))
+    n = 0
+    for path in paths:
+        n += 1
+        s_out("\rFiltering paths... %s" % p.to_string(n))
+        if path_in_network(path, subnet):
+            paths_filtered.append(path)
+
+    print("")
 
     # Generate a dictionary with path segments producing the key node
     segments = {}
+    p = Progress(max_val = len(paths_filtered))
+    n = 0
 
     # Go through all filtered paths
     for path in paths_filtered:
+
+        # Report progress
+        n += 1
+        s_out("\rGenerating path segments... %s" % p.to_string(n))
 
         # Iterate over the elements of the path
         for element in enumerate(path):
@@ -801,6 +814,11 @@ def paths_to_pathways(network, paths, target_node):
                         segments[c_node].add(tuple(segment + [c_node]))
                     except KeyError:
                         segments[c_node] = set([tuple(segment + [c_node])])
+
+    print("")
+
+    # Pathway enumeration
+    print("\nEnumerating pathways...")
 
     # Storage container for finished pathways
     finished_pathways = set()
