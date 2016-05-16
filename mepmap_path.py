@@ -785,14 +785,14 @@ def paths_to_pathways(network, paths, target_node):
     # Generate a dictionary with path segments producing the key node
     segments = {}
     p = Progress(max_val = len(paths_filtered))
-    n = 0
+    m = 0
 
     # Go through all filtered paths
     for path in paths_filtered:
 
         # Report progress
-        n += 1
-        s_out("\rGenerating path segments... %s" % p.to_string(n))
+        m += 1
+        s_out("\rGenerating path segments... %s" % p.to_string(m))
 
         # Iterate over the elements of the path
         for element in enumerate(path):
@@ -802,18 +802,31 @@ def paths_to_pathways(network, paths, target_node):
             # Check if product node
             if subnet.node[n]['type'] in {'pf','pr'}:
 
-                # Construct the segment
-                segment = path[:i+1]
+                # Construct segments
+                path_segs = []
+                offset = 0
+                while True:
+                    path_segs.append(path[i - (1 + offset):i + 1])
+                    try:
+                        # If the upstream compound node is not start
+                        if not subnet.node[path[i - (2 + offset)]]['start']:
+                            # Stop construction
+                            break
+                    # If there are no more nodes upstream
+                    except IndexError:
+                        # Stop construction
+                        break
+                    offset += 3
 
                 # Iterate over products
-                for c_node in subnet.node[n]['c']:
+                for segment in path_segs:
+                    for c_node in subnet.node[n]['c']:
 
-                    # Add the segment to every key representing a node
-                    # it can produce
-                    try:
-                        segments[c_node].add(tuple(segment + [c_node]))
-                    except KeyError:
-                        segments[c_node] = set([tuple(segment + [c_node])])
+                        # Save the segment(s) under every produced node
+                        try:
+                            segments[c_node].add(tuple(segment + [c_node]))
+                        except KeyError:
+                            segments[c_node] = set([tuple(segment + [c_node])])
 
     print("")
 
@@ -823,12 +836,13 @@ def paths_to_pathways(network, paths, target_node):
     # Storage container for finished pathways
     finished_pathways = set()
     detected_cycles = set()
-    unfinished_pathways = set([frozenset(path) for path in paths_filtered])
+    unfinished_pathways = set([frozenset(p) for p in segments[target_node]])
 
     # Progress setup
     max_length = 0
+    min_length = count_reactions(subnet)
     p = Progress(design='s')
-    p_form = '{0} Finished: {1:<12} Unfinished: {2:<10} Most reactions: {3}'
+    p_form = '{0} Finished: {1:<12} Unfinished: {2:<10} Reactions (min/max): {3:^3}/{4:^3}'
 
     # Iterate through unfinished pathways
     while unfinished_pathways:
@@ -865,6 +879,7 @@ def paths_to_pathways(network, paths, target_node):
                     detected_cycles = detected_cycles.union(cycles)
                 else:
                     max_length = max(max_length, count_reactions(pathnet))
+                    min_length = min(min_length, count_reactions(pathnet))
                     finished_pathways.add(frozenset(path))
 
             # If not, add all combinations of segments that might complement it
@@ -887,7 +902,7 @@ def paths_to_pathways(network, paths, target_node):
         # Report progress
         n_done = len(finished_pathways)
         n_left = len(unfinished_pathways)
-        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, max_length)
+        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, min_length, max_length)
         s_out(p_msg)
 
     print("")
@@ -1085,6 +1100,53 @@ def test_paths_to_pathways():
 
     assert paths_equal
     assert len(N_expected_paths) == len(output_branched_paths)
+
+    # Test for pathways going through starting compounds
+    H = nx.DiGraph()
+    rf_nodes = [101,201,301,111]
+    pf_nodes = [102,202,302,112]
+    H.add_nodes_from([1,2,3,4,5], type='c', start=True) # All start compounds
+    H.add_nodes_from(rf_nodes, type='rf')
+    H.add_nodes_from(pf_nodes, type='pf')
+    H.add_path([1,101,102,2,201,202,3,301,302,4])
+    H.add_path([5,111,112,2])
+    for n in rf_nodes:
+        H.node[n]['c'] = set(H.predecessors(n))
+    for n in pf_nodes:
+        H.node[n]['c'] = set(H.successors(n))
+    for i in range(len(rf_nodes)):
+        mid = 'R' + str(i)
+        H.node[rf_nodes[i]]['mid'] = mid
+        H.node[pf_nodes[i]]['mid'] = mid
+
+    H_expected_pathways = {
+    frozenset([301,302,4]),
+    frozenset([201,202,3,301,302,4]),
+    frozenset([101,102,2,201,202,3,301,302,4]),
+    frozenset([111,112,2,201,202,3,301,302,4])
+    }
+
+    paths = generate_paths(H, 4, 5, quiet=True)
+    output_branched_paths = paths_to_pathways(H, paths, 4)
+
+    paths_equal = True
+    missing = []
+    unexpected = []
+    for path in H_expected_pathways:
+        if path not in output_branched_paths:
+            paths_equal = False
+            missing.append(sorted(list(path)))
+    for path in output_branched_paths:
+        if path not in H_expected_pathways:
+            paths_equal = False
+            unexpected.append(sorted(list(path)))
+
+    if not paths_equal:
+        s_err("Missing: " + str(missing) + "\n")
+        s_err("Unexpected: " + str(unexpected) + "\n")
+
+    assert paths_equal
+    assert len(H_expected_pathways) == len(output_branched_paths)
 
 
 def parse_compound(compound, network):
