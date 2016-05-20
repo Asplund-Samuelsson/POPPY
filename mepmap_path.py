@@ -1326,9 +1326,116 @@ def test_update_start_compounds():
     assert nx.is_isomorphic(G, H)
 
 
+def format_pathway_text(network, pathways, target_node):
+    """Create pathways record in text format"""
+    pathway_lines = []
+
+    # Go through pathways in length order
+    for pathway in sorted(list(pathways), key=len):
+
+        # Create a subnetwork
+        subnet = network.subgraph(pathway)
+
+        # Identify the reactant nodes in the pathway
+        reactant_nodes = [
+            n[0] for n in subnet.nodes(data=True) if n[1]['type'] in {'rf','rr'}
+        ]
+
+        # Find the order of the reactions
+        rxn_nodes = sorted(
+            reactant_nodes,
+            key = lambda rn : len(nx.shortest_path(subnet, rn, target_node)),
+            reverse = True)
+
+        # Add reactions in the detected order
+        for n in rxn_nodes:
+            rxn_type = subnet.node[n]['type']
+            rxn_id = subnet.node[n]['mid']
+            rxn = network.graph['mine_data'][rxn_id]
+            if rxn_type == 'rf':
+                r = rxn['Reactants']
+                p = rxn['Products']
+            else:
+                r = rxn['Products']
+                p = rxn['Reactants']
+
+            # Flatten lists and add plus characters
+            r = [a for b in list(joinit(r, ['+'])) for a in b]
+            p = [a for b in list(joinit(p, ['+'])) for a in b]
+
+            # Combine and add reaction arrow
+            rxn_elements = r + ['<=>'] + p
+
+            # Remove "1" coefficients
+            rxn_elements = list(filter(lambda x : x is not 1, rxn_elements))
+
+            # Create text
+            pathway_lines.append(
+                rxn_id + "\t" + " ".join([str(x) for x in rxn_elements])
+            )
+
+        # Add pathway divider
+        pathway_lines.append("//")
+
+    # Return formatted pathways text
+    return "\n".join(pathway_lines) + "\n"
+
+def test_format_pathway_text():
+
+    # Set up the testing network
+    N = nx.DiGraph()
+    N.graph['mine_data'] = {
+        'R1':{'Reactants':[[1,'C4']],
+              'Products':[[2,'C1']]},
+        'R2':{'Reactants':[[1,'C2'],[1,'C3']],
+              'Products':[[1,'C5']]},
+        'R3':{'Reactants':[[1,'C4'],[1,'C5']],
+              'Products':[[1,'C6'],[1,'X0']]},
+        'R4':{'Reactants':[[1,'X9'],[2,'C7']],
+              'Products':[[1,'C6'],[1,'X8']]}
+    }
+    N.add_nodes_from([0,1,2,3,4,5,6,7,8,9], type='c')
+    N.add_nodes_from([11,21,31,41], type='rf')
+    N.add_nodes_from([12,22,32,42], type='pf')
+    N.add_nodes_from([13,23,33,43], type='rr')
+    N.add_nodes_from([14,24,34,44], type='pr')
+    for n in [11,12,13,14,21,22,23,24,31,32,33,34,41,42,43,44]:
+        N.node[n]['mid'] = 'R' + str(n)[0]
+    N.add_path([1,13,14,4,31,32,6,43,44,7])
+    N.add_path([7,41,42,6,33,34,4,11,12,1])
+    N.add_edges_from([
+        (42,8),(8,43),(44,9),(9,41),
+        (3,21),(24,3),(34,5),(5,31),
+        (32,0),(0,33)
+    ])
+    N.add_path([2,21,22,5])
+    N.add_path([5,23,24,2])
+
+    # Define the pathways
+    pathways = {
+    frozenset([13,14,4,31,32,6,43,44,7,21,22,5]),
+    frozenset([31,32,6,43,44,7,21,22,5])
+    }
+
+    # Describe the expected text output
+    exp_pathway_text = "\n".join([
+    "R2\tC2 + C3 <=> C5",
+    "R3\tC4 + C5 <=> C6 + X0",
+    "R4\tC6 + X8 <=> X9 + 2 C7",
+    "//",
+    "R1\t2 C1 <=> C4",
+    "R2\tC2 + C3 <=> C5",
+    "R3\tC4 + C5 <=> C6 + X0",
+    "R4\tC6 + X8 <=> X9 + 2 C7",
+    "//",
+    ]) + "\n"
+
+    assert format_pathway_text(N, pathways, 7) == exp_pathway_text
+
+
 # Main code block
 def main(infile_name, compound, start_comp_id_file, exact_comp_id,
-    reaction_limit, n_procs, sub_network_out, outfile_name):
+    reaction_limit, n_procs, sub_network_out, outfile_name, pathway_text):
 
     # Default results are empty
     results = {}
@@ -1367,11 +1474,17 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
         s_out(" Done.\n")
 
     # Enumerate pathways and save results
-    if outfile_name:
+    if outfile_name or pathway_text:
         pathways = paths_to_pathways(network, paths, target_node)
-        s_out("\nWriting results to pickle...")
-        pickle.dump(pathways, open(outfile_name, 'wb'))
-        s_out(" Done.\n")
+        if outfile_name:
+            s_out("\nWriting pathways to pickle...")
+            pickle.dump(pathways, open(outfile_name, 'wb'))
+            s_out(" Done.\n")
+        if pathway_text:
+            s_out("\nWriting pathways to text...")
+            with open(pathway_text, 'w') as txt:
+                txt.write(format_pathway_text(network, pathways, target_node))
+            s_out(" Done.\n")
 
 
 if __name__ == "__main__":
@@ -1394,6 +1507,10 @@ if __name__ == "__main__":
         help='Save identified pathways in pickle.'
     )
     parser.add_argument(
+        '-t', '--pathway_text', type=str, default=False,
+        help='Save identified pathways as a text file.'
+    )
+    parser.add_argument(
         '-s', '--sub_network', type=str, default=False,
         help='Save sub-network as graphml (requires -c).'
     )
@@ -1411,4 +1528,5 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     main(args.infile, args.compound, args.start_comp_ids, args.exact_comp_id,
-    args.reactions, args.processes, args.sub_network, args.outfile)
+    args.reactions, args.processes, args.sub_network, args.outfile,
+    args.pathway_text)

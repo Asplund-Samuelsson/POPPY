@@ -15,3 +15,11 @@ def s_err(string):
 
 def chunks(lst,n):
     return [ lst[i::n] for i in range(n) ]
+
+def joinit(iterable, delimiter):
+    """Intersperse iterable with a delimiter"""
+    it = iter(iterable)
+    yield next(it)
+    for x in it:
+        yield delimiter
+        yield x
