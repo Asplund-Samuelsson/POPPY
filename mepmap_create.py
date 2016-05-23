@@ -14,6 +14,7 @@ from requests import get as rget
 from rdkit import Chem
 from copy import deepcopy
 from itertools import repeat, product, combinations
+from collections import Counter
 
 # Import scripts
 import mineclient3 as mc
@@ -3775,6 +3776,101 @@ def test_merge_MINE_KEGG_rxns():
     assert KEGG_rxns == exp_KR
 
 
+def formula_to_dict(formula, H=False):
+    """Create a dictionary with atom counts from a formula string
+
+    ARGUMENTS
+
+    formula : string
+        A chemical formula.
+    H : bool
+        Set to True to include H(ydrogen) in the output.
+
+    RETURNS
+
+    formula_dict : dictionary
+        A dictionary with the counts of each element in the formula.
+    """
+
+    # Setup element-matching regular expressions
+    regex = re.compile('[A-Z]{1}[a-z]*[0-9]*')
+
+    # Prepare output dictionary
+    formula_dict = {}
+
+    # Find all elements in the formula
+    for element in re.findall(regex, formula):
+        atom = re.match('[A-Z,a-z]*', element).group()
+        try:
+            count = next(filter(None, re.findall('[0-9]*', element)))
+        except StopIteration:
+            count = 1
+        if atom != 'H' or H:
+            try:
+                formula_dict[atom] += int(count)
+            except KeyError:
+                formula_dict[atom] = int(count)
+
+    return formula_dict
+
+def test_formula_to_dict():
+    assert formula_to_dict("H5C3O2") == {'C':3,'O':2}
+    assert formula_to_dict("H12C6O5Cl") == {'C':6,'O':5,'Cl':1}
+    assert formula_to_dict("HCO3", H=True) == {'H':1,'C':1,'O':3}
+    assert formula_to_dict("C25H42N7O17P3S", H=True) == {
+        'C':25, 'H':42, 'N':7, 'O':17, 'P':3, 'S':1
+    }
+    assert formula_to_dict("ClCSH") == {'Cl':1,'C':1,'S':1}
+    assert formula_to_dict("C14H18O4(C5H8)n", H=True) == {'C':19, 'H':26, 'O':4}
+
+
+def is_balanced(reaction, comp_dict):
+    """Determines whether the reaction is balanced"""
+    def increment_elements(elements, n, comp_id):
+        try:
+            formula = Counter(formula_to_dict(comp_dict[comp_id]['Formula']))
+            for i in range(n):
+                elements = elements + formula
+        except KeyError:
+            pass
+        return elements
+
+    reactant_elements = Counter()
+    for n, reactant in reaction['Reactants']:
+        reactant_elements = increment_elements(reactant_elements, n, reactant)
+
+    product_elements = Counter()
+    for n, product in reaction['Products']:
+        product_elements = increment_elements(product_elements, n, product)
+
+    return reactant_elements == product_elements
+
+def test_is_balanced():
+    # Get balanced reactions from KEGG
+    balanced_rxns = get_KEGG_rxns([
+        'R03544','R04429','R08939','R00006',
+        'R00351','R01324','R00709','R08549',
+        'R00405','R01082','R00342','R02163'
+        ])
+
+    # Get unbalanced reactions from KEGG
+    unbalanced_rxns = get_KEGG_rxns([
+        'R01725','R08609','R05539'
+        ])
+
+    # Get the compounds from KEGG
+    comp_ids = set()
+    for rxn in balanced_rxns + unbalanced_rxns:
+        comp_ids = comp_ids.union(extract_reaction_comp_ids(rxn))
+    comp_dict = dict([(c['_id'], c) for c in get_KEGG_comps(comp_ids)])
+
+    # Check the balance status for all reactions
+    for rxn in balanced_rxns:
+        assert is_balanced(rxn, comp_dict)
+    for rxn in unbalanced_rxns:
+        assert not is_balanced(rxn, comp_dict)
+
+
 # Main code block
 def main(outfile_name, infile, mine, kegg, step_limit,
     comp_limit, C_limit, enhance, eq_filter):
@@ -3825,6 +3921,16 @@ def main(outfile_name, infile, mine, kegg, step_limit,
     # Filter to equilibrator compatible reactions
     if eq_filter and enhance:
         KEGG_rxns_Equilibrator_filter(mine_rxn_dict)
+
+    # Filter to balanced reactions
+    s_out("\nRemoving unbalanced reactions... ")
+    unbalanced_rxn_ids = set()
+    for rxn_id in mine_rxn_dict:
+        if not is_balanced(mine_rxn_dict[rxn_id], mine_comp_dict):
+            unbalanced_rxn_ids.add(rxn_id)
+    for rxn_id in unbalanced_rxn_ids:
+        del mine_rxn_dict[rxn_id]
+    s_out(" Done.\n")
 
     # Create the network
     network = construct_network(mine_comp_dict, mine_rxn_dict,
