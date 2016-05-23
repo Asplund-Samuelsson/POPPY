@@ -8,6 +8,13 @@ resources supplied by KEGG (http://www.kegg.jp/) and MINE
 **mepmap_path.py** performs path-finding, sub-network extraction and enumeration
 of putative biosynthetic pathways.
 
+**mepmap_rank.py** ranks identified pathways in terms of thermodynamic
+limitations using the MDF (Max-min Driving Force) approach.
+
+**mepmap_gibb.py** downloads Equilibrator (http://equilibrator.weizmann.ac.il/)
+transformed Gibbs standard formation energy values for a range of pHs and stores
+them in a json file for use in the MDF analysis (mepmap_rank.py).
+
 #### Dependencies
 - Python ≥ 3.5.1
 - Python NetworkX: https://github.com/networkx/networkx
