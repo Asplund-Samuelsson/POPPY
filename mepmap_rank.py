@@ -276,7 +276,7 @@ def test_drGs_for_pathway():
     assert drGs_for_pathway(pathway, dfG_dict) == exp_drGs
 
 
-def pathways_to_mdf(pathways, dfGs, ne_con, eq_con):
+def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, T=298.15, R=8.31e-3):
     """Create a dictionary with pathways and their MDF values"""
 
     mdf_dict = {}
@@ -322,7 +322,7 @@ def pathways_to_mdf(pathways, dfGs, ne_con, eq_con):
 
         # Add a result to the dictionary
         if mdf_result.success:
-            mdf_dict[pathway] = mdf_result.x[-1]
+            mdf_dict[pathway] = mdf_result.x[-1] * T * R
         else:
             mdf_dict[pathway] = None
 
@@ -367,7 +367,7 @@ def test_pathways_to_mdf():
     A_eq = None
     b_eq = None
     mdf_result = mdf.mdf(c, A, b, A_eq, b_eq)
-    pw_mdf_dict[pathways[0]] = mdf_result.x[-1]
+    pw_mdf_dict[pathways[0]] = mdf_result.x[-1] * 298.15 * 8.31e-3
 
     # Pathway 2
     S = mdf.read_reactions(pathways[1])
@@ -380,7 +380,7 @@ def test_pathways_to_mdf():
     A_eq = mdf.mdf_A_eq(S, eq_constraints)
     b_eq = mdf.mdf_b_eq(eq_constraints)
     mdf_result = mdf.mdf(c, A, b, A_eq, b_eq)
-    pw_mdf_dict[pathways[1]] = mdf_result.x[-1]
+    pw_mdf_dict[pathways[1]] = mdf_result.x[-1] * 298.15 * 8.31e-3
 
     # Pathway 3
     pw_mdf_dict[pathways[2]] = None # This pathway cannot be optimized
@@ -485,7 +485,8 @@ def test_format_output():
 
 
 # Main code block
-def main(pathway_file, outfile, dfG_json, pH, ne_con_file, eq_con_file):
+def main(pathway_file, outfile, dfG_json, pH, ne_con_file, eq_con_file,
+         T=298.15, R=8.31e-3):
 
     print("")
 
@@ -512,7 +513,7 @@ def main(pathway_file, outfile, dfG_json, pH, ne_con_file, eq_con_file):
     eq_con = mdf.read_ratio_constraints(eq_con_text)
 
     # Perform MDF
-    mdf_dict = pathways_to_mdf(pathways, dfG_dict, ne_con, eq_con)
+    mdf_dict = pathways_to_mdf(pathways, dfG_dict, ne_con, eq_con, T, R)
 
     # Format output
     output = format_output(mdf_dict)
@@ -543,6 +544,12 @@ if __name__ == "__main__":
         help='Read metabolite concentration ratios (equality constraints).'
     )
     parser.add_argument(
+        '-T', type=float, default=298.15,
+        help='Temperature (K).')
+    parser.add_argument(
+        '-R', type=float, default=8.31e-3,
+        help='Universal gas constant (kJ/(mol*K)).')
+    parser.add_argument(
         'pathways', type=str,
         help='Read mepmap pathways text file.'
     )
@@ -552,4 +559,5 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     main(args.pathways, args.outfile, args.gibbs,
-         args.pH, args.constraints, args.ratios)
+         args.pH, args.constraints, args.ratios,
+         args.T, args.R)
