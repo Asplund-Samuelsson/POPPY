@@ -94,7 +94,7 @@ def threaded_equilibrator_gibbf(queries):
 
     # Start threads
     threads = []
-    for i in range(64):
+    for i in range(16):
         t = threading.Thread(target=worker)
         t.start()
         threads.append(t)

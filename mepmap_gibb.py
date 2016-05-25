@@ -35,14 +35,20 @@ def main(compounds, out_dfG, pHs, ionic_strength=0.1):
     dfG_dicts = {}
     for e in threaded_equilibrator_gibbf(equilibrator_queries).items():
         e = list(e)
-        # A query result that is None should be expanded to a tuple
-        if e[1] is None:
-            e[1] = (None, None)
+        # Extract the dfG value
+        if e[1] is None or not e[1]:
+            dfG = None
+        else:
+            dfG = e[1][0]
+        # Extract the pH value
+        pH = e[0][1]
+        # Extract the compound ID
+        compound = e[0][0]
         # Add compound dfG to dictionary under each pH
         try:
-            dfG_dicts[e[0][1]][e[0][0]] = e[1][0]
+            dfG_dicts[pH][compound] = dfG
         except KeyError:
-            dfG_dicts[e[0][1]] = { e[0][0] : e[1][0] }
+            dfG_dicts[pH] = { compound : dfG }
     print("")
 
     # Write to outfile
@@ -124,6 +130,6 @@ if __name__ == "__main__":
         sys.exit(msg)
     s_out(" Done.\n")
 
-    pHs = [6.0, 6.5, 7.0, 7.5, 8.0]
+    pHs = [7.0]
 
     main(compounds, args.outfile, pHs)
