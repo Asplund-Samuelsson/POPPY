@@ -256,7 +256,10 @@ def test_load_dfG_dict():
 
     assert json.load(open(dfG_json.name, 'r'))["6.5"] == exp_data_dfG[6.5]
     assert loaded_dfG == downloaded_dfG
-    assert load_dfG_dict(pathways, 7.0) == load_dfG_dict(pH=7.0, dfG_json=dfG_json)
+
+    d1 = load_dfG_dict(pathways, 7.0)
+
+    assert len(d1) == 18
 
 
 def drGs_for_pathway(pathway, dfG_dict):

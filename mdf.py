@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-# gibbr commit: bd01559
-
 # Import modules
 from scipy import optimize
 import numpy as np
@@ -26,7 +24,7 @@ def sError(string):
     sys.stderr.flush()
 
 
-def read_reactions(reactions_text):
+def read_reactions(reactions_text, proton_name = "C00080"):
     """Create stoichiometric matrix DataFrame from text
 
     ARGUMENTS
@@ -56,8 +54,10 @@ def read_reactions(reactions_text):
         compounds = [c[1] for c in eq[0]] + [c[1] for c in eq[1]]
         # Store a Pandas series for the reaction
         d[rxn_id] = pd.Series(coefficients, index = compounds)
-    # Return stoichiometric matrix (pd.DataFrame)
-    return pd.DataFrame(d).fillna(0).astype(int)
+    # Construct stoichiometric matrix (pd.DataFrame)
+    S = pd.DataFrame(d).fillna(0).astype(int)
+    # Remove protons
+    return S.loc[S.index != proton_name]
 
 def test_read_reactions():
     from pandas.util.testing import assert_frame_equal
@@ -584,24 +584,38 @@ def test_mdf():
 def ratio_range(row):
     """Create a linear or logarithmic range based on a ratio DataFrame row"""
     # For fixed ratios
-    if not np.isfinite(row['ratio_upper']):
+    fixed_ratio = False
+
+    try:
+        if not np.isfinite(row['ratio_upper']):
+            fixed_ratio = True
+    except TypeError:
+        if row['ratio_upper'] is None:
+            fixed_ratio = True
+
+    if fixed_ratio:
         return np.array([row['ratio']])
+
     # For linear ratio ranges
     if row['spacing'] == 'lin':
         return np.linspace(row['ratio'], row['ratio_upper'], row['ratio_step'])
+
     # For logarithmic ratio ranges
     if row['spacing'] == 'log':
+
         # If the range starts or ends at 1.0
         if 1 <= row['ratio'] or 1 >= row['ratio_upper']:
             return np.logspace(np.log10(row['ratio']),
                                np.log10(row['ratio_upper']),
                                row['ratio_step'])
+
         # If the range is not evenly distributed around one,
         # or has an even step number
         elif 1/row['ratio'] != row['ratio_upper'] or row['ratio_step'] % 2 == 0:
             return np.logspace(np.log10(row['ratio']),
                                np.log10(row['ratio_upper']),
                                row['ratio_step'])
+
         # The final option is an even distribution and an odd number of steps
         else:
             n_b = int(row['ratio_step'] / 2)
@@ -974,6 +988,10 @@ def multi_mdf(S, all_drGs, constraints, ratio_constraints=None,
         if rats is not None:
             A_eq = mdf_A_eq(S_mod, rats)
             b_eq = mdf_b_eq(rats)
+            # If the ratio constraints have been filtered out, set to None
+            if not A_eq.size or not b_eq.size:
+                A_eq = None
+                b_eq = None
         else:
             A_eq = None
             b_eq = None
@@ -1185,11 +1203,11 @@ def test_multi_mdf_3():
 
 # Main code block
 def main(reaction_file, std_drG_file, outfile_name, cons_file, ratio_cons_file,
-         all_directions, T=298.15, R=8.31e-3):
+         all_directions, T=298.15, R=8.31e-3, proton_name='C00080'):
 
     # Load stoichiometric matrix
     sWrite("\nLoading stoichiometric matrix...")
-    S = read_reactions(open(reaction_file, 'r').read())
+    S = read_reactions(open(reaction_file, 'r').read(), proton_name)
     sWrite(" Done.\n")
 
     # Load standard reaction Gibbs energies
@@ -1233,24 +1251,44 @@ def main(reaction_file, std_drG_file, outfile_name, cons_file, ratio_cons_file,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('reactions', type=str,
-                        help='Load reactions.')
-    parser.add_argument('std_drG', type=str,
-                        help='Load standard reaction Gibbs energies.')
-    parser.add_argument('outfile', type=str,
-                        help='Write MDF table in csv format.')
-    parser.add_argument('--constraints', type=str,
-                        help='Load concentration bound constraints.')
-    parser.add_argument('--ratios', type=str,
-                        help='Load concentration ratio constraints.')
-    parser.add_argument('--all_directions', action='store_true',
-                        help='Analyze MDF for all reaction directions.')
-    parser.add_argument('-T', type=float, default=298.15,
-                        help='Temperature (K).')
-    parser.add_argument('-R', type=float, default=8.31e-3,
-                        help='Universal gas constant (kJ/(mol*K)).')
+    parser.add_argument(
+        'reactions', type=str,
+        help='Load reactions.'
+        )
+    parser.add_argument(
+        'std_drG', type=str,
+        help='Load standard reaction Gibbs energies.'
+        )
+    parser.add_argument(
+        'outfile', type=str,
+        help='Write MDF table in csv format.'
+        )
+    parser.add_argument(
+        '--constraints', type=str,
+        help='Load concentration bound constraints.'
+        )
+    parser.add_argument(
+        '--ratios', type=str,
+        help='Load concentration ratio constraints.'
+        )
+    parser.add_argument(
+        '--all_directions', action='store_true',
+        help='Analyze MDF for all reaction directions.'
+        )
+    parser.add_argument(
+        '-T', type=float, default=298.15,
+        help='Temperature (K).'
+        )
+    parser.add_argument(
+        '-R', type=float, default=8.31e-3,
+        help='Universal gas constant (kJ/(mol*K)).'
+        )
+    parser.add_argument(
+        '-H', '--proton_name', default='C00080',
+        help='Name used to identify protons.'
+        )
     args = parser.parse_args()
     main(
         args.reactions, args.std_drG, args.outfile, args.constraints,
-        args.ratios, args.all_directions, args.T, args.R
+        args.ratios, args.all_directions, args.T, args.R, args.proton_name
     )
