@@ -833,10 +833,16 @@ def paths_to_pathways(network, paths, target_node):
     # Pathway enumeration
     print("\nEnumerating pathways...")
 
-    # Storage container for finished pathways
+    # Storage container for finished and unfinished pathways
     finished_pathways = set()
-    detected_cycles = set()
     unfinished_pathways = set([frozenset(p) for p in segments[target_node]])
+
+    # Detect cycles in order to avoid "bootstrapped" compound production
+    subnet_c = subnet.copy()
+    generate_termini(subnet_c) # Start compound cycles are OK
+    s_out("Identifying cycles...")
+    detected_cycles = set([frozenset(c) for c in nx.simple_cycles(subnet_c)])
+    s_out(" Done.\n")
 
     # Progress setup
     max_length = 0
@@ -851,9 +857,9 @@ def paths_to_pathways(network, paths, target_node):
         path = set(unfinished_pathways.pop())
 
         # Check if the pathway has any known cycles
-        if not sum([c.issubset(pathnet.nodes()) for c in detected_cycles]):
+        if not sum([c.issubset(path) for c in detected_cycles]):
 
-            # Extract the paths sub-network
+            # Extract the path's sub-network
             pathnet = subnet.subgraph(path)
 
             # Determine what compounds are produced by the path
@@ -864,23 +870,9 @@ def paths_to_pathways(network, paths, target_node):
 
             # Check if the path is complete on its own
             if cpd_cons.issubset(cpd_prod.union(start_comp_nodes)):
-
-                # Make a copy for cycle identification
-                path_c = pathnet.copy()
-
-                # Cut off start compounds to allow benign cycles
-                generate_termini(path_c)
-
-                # Identify cycles
-                cycles = set([frozenset(c) for c in nx.simple_cycles(path_c)])
-                # Cycles are indicative of compounds that cannot be produced
-                # de novo by the pathway, but enter due to a bootstrap effect
-                if cycles:
-                    detected_cycles = detected_cycles.union(cycles)
-                else:
-                    max_length = max(max_length, count_reactions(pathnet))
-                    min_length = min(min_length, count_reactions(pathnet))
-                    finished_pathways.add(frozenset(path))
+                max_length = max(max_length, count_reactions(pathnet))
+                min_length = min(min_length, count_reactions(pathnet))
+                finished_pathways.add(frozenset(path))
 
             # If not, add all combinations of segments that might complement it
             else:
