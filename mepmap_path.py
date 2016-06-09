@@ -848,7 +848,7 @@ def paths_to_pathways(network, paths, target_node):
     max_length = 0
     min_length = count_reactions(subnet)
     p = Progress(design='s')
-    p_form = '{0} Finished: {1:<12} Unfinished: {2:<10} Reactions (min/max): {3:^3}/{4:^3}'
+    p_form = '{0} Finished: {1:<12} Unfinished: {2:<10} Reactions (min/max):{3:^4}/{4:^4}'
 
     # Iterate through unfinished pathways
     while unfinished_pathways:
