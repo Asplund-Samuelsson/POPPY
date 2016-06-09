@@ -130,6 +130,6 @@ if __name__ == "__main__":
         sys.exit(msg)
     s_out(" Done.\n")
 
-    pHs = [7.0]
+    pHs = [6.8, 7.4, 8.0]
 
     main(compounds, args.outfile, pHs)

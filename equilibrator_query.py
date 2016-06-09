@@ -77,7 +77,12 @@ def threaded_equilibrator_gibbf(queries):
             query = work.get()
             if query is None:
                 break
-            result = equilibrator_gibbf(*query)
+            try:
+                result = equilibrator_gibbf(*query)
+            except:
+                # In case of exception, put query back on queue
+                work.put(query)
+                work.task_done()
             if result is None:
                 out = (query, None)
             else:
@@ -102,7 +107,7 @@ def threaded_equilibrator_gibbf(queries):
     # Report on progress
     while True:
         progress = float(output.qsize() / len(queries) * 100)
-        sys.stdout.write("\rDownloading equilibrator data... %0.1f%%" % progress)
+        sys.stdout.write("\rDownloading standard formation energies... %0.1f%%" % progress)
         sys.stdout.flush()
         if output.qsize() == len(queries):
             print("")
