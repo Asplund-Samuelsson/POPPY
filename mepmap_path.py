@@ -747,7 +747,7 @@ def format_graphml(network, subnet):
     return outnet
 
 
-def paths_to_pathways(network, paths, target_node):
+def paths_to_pathways(network, paths, target_node, rxn_lim=10):
     """Enumerate complete branched pathways capable of producing the target"""
 
     # Function for determining whether a path is part of a network
@@ -862,6 +862,12 @@ def paths_to_pathways(network, paths, target_node):
             # Extract the path's sub-network
             pathnet = subnet.subgraph(path)
 
+            # Check the number of reactions
+            n_rxn = count_reactions(pathnet)
+            if n_rxn > rxn_lim:
+                # Discard if exceeding the limit
+                continue
+
             # Determine what compounds are produced by the path
             cpd_prod = nodes_being_produced(pathnet)
 
@@ -870,8 +876,8 @@ def paths_to_pathways(network, paths, target_node):
 
             # Check if the path is complete on its own
             if cpd_cons.issubset(cpd_prod.union(start_comp_nodes)):
-                max_length = max(max_length, count_reactions(pathnet))
-                min_length = min(min_length, count_reactions(pathnet))
+                max_length = max(max_length, n_rxn)
+                min_length = min(min_length, n_rxn)
                 finished_pathways.add(frozenset(path))
 
             # If not, add all combinations of segments that might complement it
@@ -884,9 +890,11 @@ def paths_to_pathways(network, paths, target_node):
                 # current missing compound nodes
                 try:
                     for complement in product(*[segments[i] for i in missing]):
-                        unfinished_pathways.add(
-                            frozenset(set(path).union(*complement))
-                        )
+                        new_pw = frozenset(set(path).union(*complement))
+                        if count_reactions(subnet.subgraph(new_pw)) <= rxn_lim:
+                            unfinished_pathways.add(
+                                frozenset(set(path).union(*complement))
+                            )
                 except KeyError:
                     # If a complement cannot be found, discard the pathway
                     pass
@@ -1032,6 +1040,13 @@ def test_paths_to_pathways():
 
     assert paths_equal
     assert len(expected_branched_paths) == len(output_branched_paths)
+
+    # Check the reaction limit
+    exp_limited_paths = {
+        frozenset(set([301,302]).union(req_1)),
+        frozenset([401,402,40,403,404,13])
+    }
+    assert paths_to_pathways(G, paths, 13, 6) == exp_limited_paths
 
     # Test for parallel paths detection and acceptance
     N = nx.DiGraph()
@@ -1430,7 +1445,8 @@ def test_format_pathway_text():
 
 # Main code block
 def main(infile_name, compound, start_comp_id_file, exact_comp_id,
-    reaction_limit, n_procs, sub_network_out, outfile_name, pathway_text):
+    rxn_lim, depth, n_procs, sub_network_out, outfile_name,
+    pathway_text):
 
     # Default results are empty
     results = {}
@@ -1458,7 +1474,7 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
         sys.exit("Error: Target node was not found. Check compound '" + \
         compound + "'.\n")
 
-    paths = generate_paths(network, target_node, reaction_limit, n_procs)
+    paths = generate_paths(network, target_node, depth, n_procs)
 
     # Save sub-network graphml
     if sub_network_out:
@@ -1470,7 +1486,7 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
 
     # Enumerate pathways and save results
     if outfile_name or pathway_text:
-        pathways = paths_to_pathways(network, paths, target_node)
+        pathways = paths_to_pathways(network, paths, target_node, rxn_lim)
         if outfile_name:
             s_out("\nWriting pathways to pickle...")
             pickle.dump(pathways, open(outfile_name, 'wb'))
@@ -1514,8 +1530,12 @@ if __name__ == "__main__":
         help='Look for exact compound ID.'
     )
     parser.add_argument(
-        '-r', '--reactions', type=int, default=5,
+        '-r', '--reactions', type=int, default=10,
         help='Maximum number of reactions.'
+    )
+    parser.add_argument(
+        '-d', '--depth', type=int, default=5,
+        help='Maximum direct path depth.'
     )
     parser.add_argument(
         '-p', '--processes', type=int, default=1,
@@ -1523,5 +1543,5 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     main(args.infile, args.compound, args.start_comp_ids, args.exact_comp_id,
-    args.reactions, args.processes, args.sub_network, args.outfile,
+    args.reactions, args.depth, args.processes, args.sub_network, args.outfile,
     args.pathway_text)
