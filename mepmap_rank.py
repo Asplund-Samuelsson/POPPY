@@ -279,62 +279,122 @@ def test_drGs_for_pathway():
     assert drGs_for_pathway(pathway, dfG_dict) == exp_drGs
 
 
-def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, T=298.15, R=8.31e-3):
+def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
+    T=298.15, R=8.31e-3):
     """Create a dictionary with pathways and their MDF values"""
 
-    mdf_dict = {}
+    # Define the worker
+    def worker(dfGs):
+        while True:
+            pw_int_chunk = work.get()
+            if pw_int_chunk is None:
+                break
+            mdf_results = []
+            for pathway, pw_int in [(pathways[n], n) for n in pw_int_chunk]:
 
-    # Perform MDF analysis for each pathway
+                # Construct standard reaction Gibbs energy dataframe
+                drGs_d = drGs_for_pathway(pathway, dfGs)
+                drGs_t = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_d.items()])
+                drGs = mdf.read_reaction_drGs(drGs_t)
 
-    p = Progress(design='cp', max_val=len(pathways))
-    n = 0
+                # Construct stoichiometric matrix
+                S = mdf.read_reactions(pathway)
 
-    for pathway in pathways:
+                # Construct c vector
+                c = mdf.mdf_c(S)
 
-        # Construct standard reaction Gibbs energy dataframe
-        drGs_d = drGs_for_pathway(pathway, dfGs)
-        drGs_t = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_d.items()])
-        drGs = mdf.read_reaction_drGs(drGs_t)
+                # Construct A matrix
+                A = mdf.mdf_A(S)
 
-        # Construct stoichiometric matrix
-        S = mdf.read_reactions(pathway)
+                # Construct b vector
+                b = mdf.mdf_b(S, drGs, ne_con)
 
-        # Construct c vector
-        c = mdf.mdf_c(S)
+                # Filter the ratio constraints to those relevant to S
+                eq_con_f = eq_con[eq_con['cpd_id_num'].isin(S.index)]
+                eq_con_f = eq_con_f[eq_con_f['cpd_id_den'].isin(S.index)]
 
-        # Construct A matrix
-        A = mdf.mdf_A(S)
+                # Construct A_eq matrix and b_eq vector if equality constraints exist
+                if not eq_con_f.empty:
+                    A_eq = mdf.mdf_A_eq(S, eq_con_f)
+                    b_eq = mdf.mdf_b_eq(eq_con_f)
+                else:
+                    A_eq = None
+                    b_eq = None
 
-        # Construct b vector
-        b = mdf.mdf_b(S, drGs, ne_con)
+                # Run MDF optimization
+                mdf_result = mdf.mdf(c, A, b, A_eq, b_eq)
 
-        # Filter the ratio constraints to those relevant to S
-        eq_con_f = eq_con[eq_con['cpd_id_num'].isin(S.index)]
-        eq_con_f = eq_con_f[eq_con_f['cpd_id_den'].isin(S.index)]
+                # Add a result to the list
+                if mdf_result.success:
+                    mdf_results.append((pw_int, mdf_result.x[-1] * T * R))
+                else:
+                    mdf_results.append((pw_int, None))
+            output.extend(mdf_results)
+            with lock:
+                n_work_done.value += 1
 
-        # Construct A_eq matrix and b_eq vector if equality constraints exist
-        if not eq_con_f.empty:
-            A_eq = mdf.mdf_A_eq(S, eq_con_f)
-            b_eq = mdf.mdf_b_eq(eq_con_f)
-        else:
-            A_eq = None
-            b_eq = None
+    # Set up reporter thread
+    def reporter():
+        n_work = len(pathways)
+        n_left = len(pathways)
+        p = Progress(design='cp', max_val=n_work)
+        while n_left > 0:
+            # Check progress
+            n_done = len(output)
+            n_left = n_work - n_done
+            s_out("\rPerforming pathway MDF analysis... %s" % p.to_string(n_done))
+            time.sleep(1)
 
-        # Run MDF optimization
-        mdf_result = mdf.mdf(c, A, b, A_eq, b_eq)
+    with mp.Manager() as manager:
+        # Initialize Work queue in manager
+        work = manager.Queue()
 
-        # Add a result to the dictionary
-        if mdf_result.success:
-            mdf_dict[pathway] = mdf_result.x[-1] * T * R
-        else:
-            mdf_dict[pathway] = None
+        for pw_int_chunk in chunks(list(range(len(pathways))), 200):
+            work.put(pw_int_chunk)
 
-        # Report progress
-        n += 1
-        s_out("\rPerforming MDF analysis for pathways... %s" % p.to_string(n))
+        # Place stop signals on queue
+        for i in range(n_procs):
+            work.put(None)
 
-    print("")
-    return mdf_dict
+        n_work = work.qsize()
+
+        # Initialize output list in manager
+        output = manager.list()
+
+        # Initialize number of tasks done counter
+        n_work_done = mp.Value('i', 0)
+        lock = mp.Lock()
+
+        # Start reporter
+        reporter = threading.Thread(target=reporter)
+        reporter.start()
+
+        # Start processes
+        procs = []
+        for i in range(n_procs):
+            p = mp.Process(target=worker, args=(dfGs,))
+            procs.append(p)
+            p.start()
+
+        # Wait until all work is done
+        while n_work_done.value != n_work - n_procs:
+            time.sleep(1)
+
+        # Terminate the processes
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+
+        # Stop reporter
+        reporter.join()
+        print("")
+
+        # Construct MDF dictionary
+        mdf_dict = {}
+        for mdf_result in list(output):
+            mdf_dict[pathways[mdf_result[0]]] = mdf_result[1]
+        return mdf_dict
+
 
 def test_pathways_to_mdf():
     pathways = [
@@ -489,7 +549,7 @@ def test_format_output():
 
 # Main code block
 def main(pathway_file, outfile, dfG_json, pH, ne_con_file, eq_con_file,
-         T=298.15, R=8.31e-3):
+         n_procs=1, T=298.15, R=8.31e-3):
 
     print("")
 
@@ -516,7 +576,9 @@ def main(pathway_file, outfile, dfG_json, pH, ne_con_file, eq_con_file,
     eq_con = mdf.read_ratio_constraints(eq_con_text)
 
     # Perform MDF
-    mdf_dict = pathways_to_mdf(pathways, dfG_dict, ne_con, eq_con, T, R)
+    mdf_dict = pathways_to_mdf(
+        pathways, dfG_dict, ne_con, eq_con, n_procs, T, R
+    )
 
     # Format output
     output = format_output(mdf_dict)
@@ -547,6 +609,10 @@ if __name__ == "__main__":
         help='Read metabolite concentration ratios (equality constraints).'
     )
     parser.add_argument(
+        '-p', '--processes', type=int, default=1,
+        help='Number of parallel processes to run.'
+    )
+    parser.add_argument(
         '-T', type=float, default=298.15,
         help='Temperature (K).')
     parser.add_argument(
@@ -563,4 +629,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(args.pathways, args.outfile, args.gibbs,
          args.pH, args.constraints, args.ratios,
-         args.T, args.R)
+         args.processes, args.T, args.R)
