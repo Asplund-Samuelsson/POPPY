@@ -79,16 +79,16 @@ def threaded_equilibrator_gibbf(queries):
                 break
             try:
                 result = equilibrator_gibbf(*query)
+                if result is None:
+                    out = (query, None)
+                else:
+                    out = (query, result)
+                output.put(out)
+                work.task_done()
             except:
                 # In case of exception, put query back on queue
                 work.put(query)
                 work.task_done()
-            if result is None:
-                out = (query, None)
-            else:
-                out = (query, result)
-            output.put(out)
-            work.task_done()
 
     # Initialise queues
     work = queue.Queue()

@@ -1166,8 +1166,8 @@ def parse_compound(compound, network):
                 nodes = "'\n'".join(
                     sorted([network.node[n]['mid'] for n in nodes])
                 )
-                s_err("Error: '" + compound + "' refers to multiple nodes." + \
-                " Use --exact_comp_id and --compound followed by one of:\n'" + \
+                s_err("Error: '" + compound + "' refers to multiple IDs." + \
+                " Use --exact_comp_id and one of:\n'" + \
                 nodes + "'\n")
             else:
                 node = list(nodes)[0]
@@ -1185,8 +1185,8 @@ def parse_compound(compound, network):
                 nodes = "'\n'".join(
                     sorted([network.node[n]['mid'] for n in nodes])
                 )
-                s_err("Error: '" + compound + "' refers to multiple nodes." + \
-                " Use --exact_comp_id and --compound followed by one of:\n'" + \
+                s_err("Error: '" + compound + "' refers to multiple IDs." + \
+                " Use --exact_comp_id and one of:\n'" + \
                 nodes + "'\n")
             else:
                 node = list(nodes)[0]
@@ -1264,8 +1264,8 @@ def test_parse_compound(capsys):
     assert parse_compound('C00001', G) == None
     assert parse_compound('Delta', G) == None
 
-    exp_err = "Error: 'Twin' refers to multiple nodes. Use --exact_comp_id" + \
-    " and --compound followed by one of:\n" + \
+    exp_err = "Error: 'Twin' refers to multiple IDs. Use --exact_comp_id" + \
+    " and one of:\n" + \
     "'C12c16f3e8910911f982fe6fcd541c35bca59119e'\n" + \
     "'C5a2e2841cff1008380531689c8c45b6dbecd04b6'\n"
     exp_err = exp_err + "Error: MINE ID " + \
@@ -1334,10 +1334,13 @@ def format_pathway_text(network, pathways, target_node):
         ]
 
         # Find the order of the reactions
-        rxn_nodes = sorted(
-            reactant_nodes,
-            key = lambda rn : len(nx.shortest_path(subnet, rn, target_node)),
-            reverse = True)
+        def distance(rxn_node):
+            if nx.has_path(subnet, rxn_node, target_node):
+                return len(nx.shortest_path(subnet, rxn_node, target_node))
+            else:
+                return 0
+
+        rxn_nodes = sorted(reactant_nodes, key = distance, reverse = True)
 
         # Add reactions in the detected order
         for n in rxn_nodes:
