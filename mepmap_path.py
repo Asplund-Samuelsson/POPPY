@@ -841,10 +841,19 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10):
     max_length = 0
     min_length = count_reactions(subnet)
     p = Progress(design='s')
-    p_form = '{0} Finished: {1:<12} Unfinished: {2:<10} Reactions (min/max):{3:^4}/{4:^4}'
+    F = '{0} Finished: {1:<12} Unfinished: {2:<10} Reactions (min/max):{3:^4}/{4:^4}'
+
+    def report_progress():
+        D = len(finished_pathways)
+        L = len(unfinished_pathways)
+        p_msg = "\r" + F.format(p.to_string(), D, L, min_length, max_length)
+        s_out(p_msg)
 
     # Iterate through unfinished pathways
     while unfinished_pathways:
+
+        # Report progress
+        report_progress()
 
         # Pop a path off the set of unfinished pathways
         path = set(unfinished_pathways.pop())
@@ -894,11 +903,8 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10):
                 # If a complement cannot be found, discard the pathway
                 pass
 
-        # Report progress
-        n_done = len(finished_pathways)
-        n_left = len(unfinished_pathways)
-        p_msg = "\r" + p_form.format(p.to_string(), n_done, n_left, min_length, max_length)
-        s_out(p_msg)
+    # Report final progress
+    report_progress()
 
     print("")
 
