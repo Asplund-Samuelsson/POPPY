@@ -837,13 +837,6 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10):
     finished_pathways = set()
     unfinished_pathways = set([frozenset(p) for p in segments[target_node]])
 
-    # Detect cycles in order to avoid "bootstrapped" compound production
-    subnet_c = subnet.copy()
-    generate_termini(subnet_c) # Start compound cycles are OK
-    s_out("Identifying cycles...")
-    detected_cycles = set([frozenset(c) for c in nx.simple_cycles(subnet_c)])
-    s_out(" Done.\n")
-
     # Progress setup
     max_length = 0
     min_length = count_reactions(subnet)
@@ -856,48 +849,50 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10):
         # Pop a path off the set of unfinished pathways
         path = set(unfinished_pathways.pop())
 
-        # Check if the pathway has any known cycles
-        if not sum([c.issubset(path) for c in detected_cycles]):
+        # Extract the path's sub-network
+        pathnet = subnet.subgraph(path)
 
-            # Extract the path's sub-network
-            pathnet = subnet.subgraph(path)
+        # Discard the pathway if it contains cycles
+        # Cycles are 1) wasteful and 2) indicate bootstrap compounds
+        if not nx.is_directed_acyclic_graph(pathnet):
+            continue
 
-            # Check the number of reactions
-            n_rxn = count_reactions(pathnet)
-            if n_rxn > rxn_lim:
-                # Discard if exceeding the limit
-                continue
+        # Check the number of reactions
+        n_rxn = count_reactions(pathnet)
+        if n_rxn > rxn_lim:
+            # Discard if exceeding the limit
+            continue
 
-            # Determine what compounds are produced by the path
-            cpd_prod = nodes_being_produced(pathnet)
+        # Determine what compounds are produced by the path
+        cpd_prod = nodes_being_produced(pathnet)
 
-            # Determine what compounds are consumed by the path
-            cpd_cons = nodes_being_consumed(pathnet)
+        # Determine what compounds are consumed by the path
+        cpd_cons = nodes_being_consumed(pathnet)
 
-            # Check if the path is complete on its own
-            if cpd_cons.issubset(cpd_prod.union(start_comp_nodes)):
-                max_length = max(max_length, n_rxn)
-                min_length = min(min_length, n_rxn)
-                finished_pathways.add(frozenset(path))
+        # Check if the path is complete on its own
+        if cpd_cons.issubset(cpd_prod.union(start_comp_nodes)):
+            max_length = max(max_length, n_rxn)
+            min_length = min(min_length, n_rxn)
+            finished_pathways.add(frozenset(path))
 
-            # If not, add all combinations of segments that might complement it
-            else:
+        # If not, add all combinations of segments that might complement it
+        else:
 
-                # Identify the missing compound nodes
-                missing = cpd_cons - cpd_prod - start_comp_nodes
+            # Identify the missing compound nodes
+            missing = cpd_cons - cpd_prod - start_comp_nodes
 
-                # Construct sets of complementary segments that will satisfy the
-                # current missing compound nodes
-                try:
-                    for complement in product(*[segments[i] for i in missing]):
-                        new_pw = frozenset(set(path).union(*complement))
-                        if count_reactions(subnet.subgraph(new_pw)) <= rxn_lim:
-                            unfinished_pathways.add(
-                                frozenset(set(path).union(*complement))
-                            )
-                except KeyError:
-                    # If a complement cannot be found, discard the pathway
-                    pass
+            # Construct sets of complementary segments that will satisfy the
+            # current missing compound nodes
+            try:
+                for complement in product(*[segments[i] for i in missing]):
+                    new_pw = frozenset(set(path).union(*complement))
+                    if count_reactions(subnet.subgraph(new_pw)) <= rxn_lim:
+                        unfinished_pathways.add(
+                            frozenset(set(path).union(*complement))
+                        )
+            except KeyError:
+                # If a complement cannot be found, discard the pathway
+                pass
 
         # Report progress
         n_done = len(finished_pathways)
