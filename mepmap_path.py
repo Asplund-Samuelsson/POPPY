@@ -638,7 +638,10 @@ def subnetwork_from_paths(network, paths, target_node):
         # Identify the incomplete reactions and remove them
         remove_incomplete_reactions(subnet)
         # Reduce to the connected component
-        subnet = subnet.subgraph(digraph_connected_component(subnet, target_node))
+        try:
+            subnet = subnet.subgraph(digraph_connected_component(subnet, target_node))
+        except KeyError:
+            sys.exit("\nError: Subnetwork cannot generate target compound.\n")
         n_removed = n_before - len(subnet)
         # Exit with an error message if the target node was removed
         if target_node not in subnet.nodes():
@@ -835,7 +838,13 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10):
 
     # Storage container for finished and unfinished pathways
     finished_pathways = set()
-    unfinished_pathways = set([frozenset(p) for p in segments[target_node]])
+    try:
+        unfinished_pathways = set([frozenset(p) for p in segments[target_node]])
+    except KeyError:
+        sys.exit("\nError: Subnetwork cannot generate target compound.\n")
+
+    # Keep track of (partial) pathways that have already been generated
+    generated_pathways = set()
 
     # Progress setup
     max_length = 0
@@ -895,10 +904,11 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10):
             try:
                 for complement in product(*[segments[i] for i in missing]):
                     new_pw = frozenset(set(path).union(*complement))
-                    if count_reactions(subnet.subgraph(new_pw)) <= rxn_lim:
-                        unfinished_pathways.add(
-                            frozenset(set(path).union(*complement))
-                        )
+                    if new_pw not in generated_pathways:
+                        if count_reactions(subnet.subgraph(new_pw)) <= rxn_lim:
+                            unfinished_pathways.add(new_pw)
+                            generated_pathways.add(new_pw)
+
             except KeyError:
                 # If a complement cannot be found, discard the pathway
                 pass
