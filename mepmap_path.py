@@ -3,6 +3,8 @@
 # Import modules
 import networkx as nx
 import sys
+import os
+import subprocess as sub
 import argparse
 import pickle
 import multiprocessing as mp
@@ -10,13 +12,22 @@ import time
 from datetime import timedelta as delta
 import threading
 import re
+import pandas as pd
+import gzip
 from itertools import product
+from shutil import copyfile
 
 # Import scripts
 from progress import Progress
 import mineclient3 as mc
 from mepmap_origin_helpers import *
 from mepmap_helpers import *
+import mepmap_rank as rank
+from mepmap_create import extract_reaction_comp_ids
+
+# Specify path to repository
+global repo_dir
+repo_dir = os.path.dirname(__file__)
 
 # Define functions
 def count_reactions(network):
@@ -1344,7 +1355,50 @@ def test_update_start_compounds():
     assert nx.is_isomorphic(G, H)
 
 
-def format_pathway_text(network, pathways, target_node):
+def format_reaction_text(reaction, reverse=False):
+    if not reverse:
+        r = reaction['Reactants']
+        p = reaction['Products']
+    else:
+        r = reaction['Products']
+        p = reaction['Reactants']
+
+    # Flatten lists and add plus characters
+    r = [a for b in list(joinit(r, ['+'])) for a in b]
+    p = [a for b in list(joinit(p, ['+'])) for a in b]
+
+    # Combine and add reaction arrow
+    rxn_elements = r + ['<=>'] + p
+
+    # Remove "1" coefficients
+    rxn_elements = list(filter(lambda x : x is not 1, rxn_elements))
+
+    # Create text
+    return " ".join([str(x) for x in rxn_elements])
+
+def test_format_reaction_text():
+    reactions = [
+        {'Reactants':[[1,'C4']],
+         'Products':[[2,'C1']]},
+        {'Reactants':[[1,'C2'],[1,'C3']],
+         'Products':[[1,'C5']]},
+        {'Reactants':[[1,'C4'],[1,'C5']],
+         'Products':[[1,'C6'],[1,'X0']]},
+        {'Reactants':[[1,'X9'],[2,'C7']],
+         'Products':[[1,'C6'],[1,'X8']]}
+    ]
+    exp_txt = [
+        "C4 <=> 2 C1", "2 C1 <=> C4",
+        "C2 + C3 <=> C5", "C5 <=> C2 + C3",
+        "C4 + C5 <=> C6 + X0", "C6 + X0 <=> C4 + C5",
+        "X9 + 2 C7 <=> C6 + X8", "C6 + X8 <=> X9 + 2 C7"
+    ]
+    for R in enumerate(reactions):
+        assert format_reaction_text(R[1]) == exp_txt[R[0]*2]
+        assert format_reaction_text(R[1], reverse=True) == exp_txt[R[0]*2+1]
+
+
+def format_pathway_text(network, pathways, target_node, pw_sep=True):
     """Create pathways record in text format"""
     pathway_lines = []
 
@@ -1374,29 +1428,16 @@ def format_pathway_text(network, pathways, target_node):
             rxn_id = subnet.node[n]['mid']
             rxn = network.graph['mine_data'][rxn_id]
             if rxn_type == 'rf':
-                r = rxn['Reactants']
-                p = rxn['Products']
+                rxn_text = format_reaction_text(rxn)
             else:
-                r = rxn['Products']
-                p = rxn['Reactants']
-
-            # Flatten lists and add plus characters
-            r = [a for b in list(joinit(r, ['+'])) for a in b]
-            p = [a for b in list(joinit(p, ['+'])) for a in b]
-
-            # Combine and add reaction arrow
-            rxn_elements = r + ['<=>'] + p
-
-            # Remove "1" coefficients
-            rxn_elements = list(filter(lambda x : x is not 1, rxn_elements))
+                rxn_text = format_reaction_text(rxn, reverse=True)
 
             # Create text
-            pathway_lines.append(
-                rxn_id + "\t" + " ".join([str(x) for x in rxn_elements])
-            )
+            pathway_lines.append(rxn_id + "\t" + rxn_text)
 
         # Add pathway divider
-        pathway_lines.append("//")
+        if pw_sep:
+            pathway_lines.append("//")
 
     # Return formatted pathways text
     return "\n".join(pathway_lines) + "\n"
@@ -1454,10 +1495,597 @@ def test_format_pathway_text():
     assert format_pathway_text(N, pathways, 7) == exp_pathway_text
 
 
+def format_mdf_summary(mdf_dict, network):
+
+    # Set up column series
+    pw_hash = []
+    pw_nrxn = []
+    pw_mdfs = []
+    pw_rxns = []
+    pw_txts = []
+
+    # Iterate over pathways in the MDF dictionary
+    for pw_txt in mdf_dict:
+
+        # Append hash
+        pw_hash.append(rank.generate_pathway_hash(pw_txt))
+
+        # Append number of reactions
+        pw_nrxn.append(len(set([
+            x.split("\t")[0] for x in filter(None, pw_txt.split("\n"))
+        ])))
+
+        # Append MDF
+        pw_mdfs.append(mdf_dict[pw_txt])
+
+        # Generate list of reaction IDs with directionality
+        rxn_ids = []
+        for rxn_line in filter(None, pw_txt.split("\n")):
+            rxn_id = rxn_line.split("\t")[0]
+            rxn_txt = rxn_line.split("\t")[1]
+            rxn = network.graph['mine_data'][rxn_id]
+
+            # Check if the reaction is presented in reverse direction
+            if rxn_txt != format_reaction_text(rxn):
+                rxn_id = "-" + rxn_id
+
+            # Append to list of reactions in correct order
+            rxn_ids.append(rxn_id)
+
+        pw_rxns.append(",".join(rxn_ids))
+
+        # Append pathway text
+        pw_txts.append(pw_txt)
+
+    # Construct dataframe
+    pw_df = pd.DataFrame({
+        'pathway'   : pw_hash,
+        'length'    : pw_nrxn,
+        'MDF'       : pw_mdfs,
+        'reactions' : pw_rxns,
+        'pw_txt'   : pw_txts
+    }, columns = ['pathway','MDF','length','reactions','pw_txt'])
+
+    # Sort the dataframe
+    pw_df = pw_df.sort_values(['MDF', 'length'], ascending=[False, True])
+
+    # Turn dataframe into text
+    text_output = pw_df.to_csv(
+        na_rep='NA', index=False, float_format='%.3f', sep='\t',
+        columns = ['pathway','MDF','length','reactions']
+    )
+    return (pw_df, text_output)
+
+def test_format_mdf_summary():
+    # Set up testing "network"
+    network = nx.DiGraph()
+    network.graph['mine_data'] = {
+        'R1':{'Reactants':[[1,'A']],'Products':[[2,'B']]},
+        'R2':{'Reactants':[[1,'B']],'Products':[[1,'C']]},
+        'R3':{'Reactants':[[1,'C']],'Products':[[2,'D']]},
+        'R4':{'Reactants':[[2,'B']],'Products':[[1,'D'],[1,'E']]},
+        'R5':{'Reactants':[[1,'D']],'Products':[[1,'B']]},
+        'R6':{'Reactants':[[1,'D'],[1,'X']],'Products':[[1,'B']]}
+    }
+
+    # Set up testing pathways in text format
+    pw_1 = "\n".join([
+        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R2' + "\t" + format_reaction_text(network.graph['mine_data']['R2']),
+        'R3' + "\t" + format_reaction_text(network.graph['mine_data']['R3'])
+    ])
+    pw_2 = "\n".join([
+        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R4' + "\t" + format_reaction_text(network.graph['mine_data']['R4'])
+    ])
+    pw_3 = "\n".join([
+        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R5' + "\t" + format_reaction_text(network.graph['mine_data']['R5'], 1)
+    ])
+    pw_4 = "\n".join([
+        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R6' + "\t" + format_reaction_text(network.graph['mine_data']['R6'], 1)
+    ])
+
+    # Set up the testing MDF dictionary
+    mdf_dict = {pw_1 : 5.0006, pw_2 : 5.0006, pw_3 : 4.3, pw_4 : None}
+
+    # The expected output
+    exp_summary_txt = "\n".join([
+        "\t".join(x) for x in [
+            ['pathway', 'MDF', 'length', 'reactions'],
+            ['47afbbd9e7', '5.001', '2', 'R1,R4'],
+            ['8d415da2b3', '5.001', '3', 'R1,R2,R3'],
+            ['a3943b79d8', '4.300', '2', 'R1,-R5'],
+            ['560b193f2a', 'NA', '2', 'R1,-R6']]
+    ]) + "\n"
+
+    assert exp_summary_txt == format_mdf_summary(mdf_dict, network)[1]
+
+
+def format_pathway_html(pw_df, network, target_node, depth, rxn_lim, n_pw=200):
+
+    html = []
+
+    # Reduce dataframe to top pathways
+    pw_df_top = pw_df.head(n_pw)
+
+    # Gather general metrics and descriptive information
+    number_of_pathways = pw_df.shape[0]
+
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+
+    target_cpd_id = network.node[target_node]['mid']
+    try:
+        target_cpd_name = network.graph['mine_data'][target_cpd_id]['Names'][0]
+    except (KeyError, IndexError) as e:
+        target_cpd_name = target_cpd_id + '(no name)'
+
+    n_feasible = sum(pw_df['MDF'] > 0)
+    n_infeasible = number_of_pathways - n_feasible
+
+    # Add the HTML header section
+    html.extend([
+        '<!DOCTYPE html>',
+        '<html>',
+        '<head>',
+        '  <link rel="stylesheet" href="style.css">',
+        '<base target="_blank">',
+        '</head>',
+        '<body>',
+        ''
+    ])
+
+    # Add the summary section of the report
+    html.extend([
+        '<table border=0>',
+        '<tr>',
+        '  <td>',
+        '  <h3><b>Report: %i %s pathways</b></h3>' % (number_of_pathways, target_cpd_name),
+        '  </td>',
+        '  <td>',
+        '    <h5><b>MDF</b></h5>',
+        '  </td>',
+        '  <td>',
+        '    <h5><b>Pathway length</b></h5>',
+        '  </td>',
+        '</tr>',
+        '<tr>',
+        '  <td>',
+        '  <li><h5><b>Report generated on:</b> %s</h5>' % timestamp,
+        '  <li><h5><b>Target compound:</b> %s (%s)</h5>' % (target_cpd_name, target_cpd_id),
+        '  <li><h5><b>Reaction depth:</b> %i</h5>' % depth,
+        '  <li><h5><b>Reaction limit:</b> %i</h5>' % rxn_lim,
+        '  <li><h5><b>Number of pathways:</b> %i</h5>' % number_of_pathways,
+        '  <li><h5><b>Feasible/infeasible:</b> %i/%i</h5>' % (n_feasible, n_infeasible),
+        '  </td>',
+        '  <td>',
+        '  <img src="mdf_summary.png" style="width: 200px;"/>',
+        '  </td>',
+        '  <td>',
+        '  <img src="length_summary.png" style="width: 200px;"/>',
+        '  </td>',
+        '</tr>',
+        '</table>',
+        ''
+    ])
+
+    # Define some formatting functions
+    def kegg_url(kegg_id):
+        return 'http://www.genome.jp/dbget-bin/www_bget?' + kegg_id
+
+    def cpd_td(cpd_type):
+        color = {'o':'#c7eae5','i':'#f6e8c3','t':'#c2a5cf'}[cpd_type]
+        return '<td style="background-color:%s">' % color
+
+    def enz_link(operator):
+        if operator.startswith('M:'):
+            operator = operator.lstrip('M:') + '*'
+        op_list = [n.strip('-') for n in operator.split(".")]
+        if not re.match('^[0-9]+$', op_list[-1]):
+            op_list[-1] = '-'
+        enz_url = "http://enzyme.expasy.org/EC/" + '.'.join(op_list)
+        return '<a href="%s">%s</a>' % (enz_url, operator)
+
+    def insert_img(n, cpd_id):
+        if n > 1:
+            img_str_l = str(n) + ' <img src="cpd_png/'
+        else:
+            img_str_l = '<img src="cpd_png/'
+        return img_str_l + '%s.png" style="width: 75px;"/>' % cpd_id
+
+    # Add report for each pathway
+    for pw_row in pw_df_top.iterrows():
+        # Add HR line
+        html.extend(['<hr>',''])
+
+        # Add title and MDF
+        if pd.isnull(pw_row[1]['MDF']):
+            m = 'MDF FAILED'
+        else:
+            m = '%.3f kJ/mol' % pw_row[1]['MDF']
+        p = pw_row[1]['pathway']
+        n = pw_row[1]['length']
+        html.append('<h5>Pathway "%s": %s, %i reactions</h5>' % (p, m, n))
+        html.append('')
+
+        # Iterate over reactions, add one table for each
+        for rxn_line in filter(None, pw_row[1]['pw_txt'].split("\n")):
+
+            # Table start
+            html.extend(['<table border=0>','<tr>'])
+
+            # Parse elements of the reaction line
+            rxn_id = rxn_line.split("\t")[0]
+            rxn_eq = rank.parse_equation(rxn_line.split("\t")[1])
+
+            # Add link to reaction
+            if rxn_id.startswith('RM'):
+                html.append('  <td>%s</td>' % rxn_id)
+            else:
+                url = kegg_url(rxn_id)
+                html.append('  <td><a href="%s">%s</a></td>' % (url, rxn_id))
+
+            # Iterate over compounds for the first table row
+            name_cells = []
+            for cpd_id in [e[1] for e in rxn_eq[0] + rxn_eq[1]]:
+
+                # Identify the compound type (target, origin or intermediate)
+                cpd_node = network.graph['cmid2node'][cpd_id]
+
+                if cpd_node == target_node:
+                    cpd_type = 't'
+                elif network.node[cpd_node]['start']:
+                    cpd_type = 'o'
+                else:
+                    cpd_type = 'i'
+
+                # Generate KEGG URL and name
+                url = kegg_url(cpd_id)
+                try:
+                    cpd_name = network.graph['mine_data'][cpd_id]['Names'][0]
+                except (KeyError, IndexError) as e:
+                    cpd_name = cpd_id + '(no name)'
+
+                # Add table cells
+                name_cells.append(
+                    ''.join(['  ', cpd_td(cpd_type), '<a href="',
+                             url, '">', cpd_name, '</a></td>'])
+                )
+
+            html.extend(joinit(name_cells, '  <td></td>'))
+
+            html.append('</tr>')
+
+            # Add second row of table (compound images)
+            html.append('<tr>')
+
+            # Add links to Expasy for the EC classes/operators
+            operators = network.graph['mine_data'][rxn_id]['Operators']
+            html.append('  <td><p>')
+            html.extend(['    ' + enz_link(op) + '<br>' for op in operators])
+            html.append('  </p></td>')
+
+            # Iterate over compounds for the second table row
+            img_cells = []
+            for el in rxn_eq[0]:
+                img_cells.append('  <td>' + insert_img(el[0], el[1]) + '</td>')
+            html.extend(joinit(img_cells, '  <td>+</td>'))
+
+            html.append('  <td><=></td>')
+
+            img_cells = []
+            for el in rxn_eq[1]:
+                img_cells.append('  <td>' + insert_img(el[0], el[1]) + '</td>')
+            html.extend(joinit(img_cells, '  <td>+</td>'))
+            html.append('</tr>')
+
+            # End table
+            html.extend(['</table>',''])
+
+    return "\n".join(html)
+
+def test_format_pathway_html():
+    # Set up testing "network"
+    network = nx.DiGraph()
+    network.graph['mine_data'] = {
+        'R1':{'Reactants':[[1,'A']],
+              'Products':[[2,'B']],
+              'Operators':['M:1.2.3.a','1.2.3.54']},
+        'R2':{'Reactants':[[1,'B']],
+              'Products':[[1,'C']],
+              'Operators':['3.2.1.-']},
+        'R3':{'Reactants':[[1,'C']],
+              'Products':[[2,'D']],
+              'Operators':['2.2.2.22','M:2.3.-4.c']},
+        'R4':{'Reactants':[[2,'B']],
+              'Products':[[1,'D'],[1,'E']],
+              'Operators':['M:4.1.-1.4c','4.1.1.1']},
+        'R5':{'Reactants':[[1,'D']],
+              'Products':[[1,'B']],
+              'Operators':['1.3.1.78','1.3.1.79']},
+        'RM6':{'Reactants':[[1,'D'],[1,'X']],
+               'Products':[[1,'B']],
+               'Operators':['M:3.1.1.b']},
+        'A':{'Names':['cA','cA1']},
+        'B':{'Names':['cB','cB1']},
+        'C':{'Names':['cC']},
+        'D':{'Names':['cD']},
+        'E':{'Names':['cE','cE1','cE2']},
+        'X':{'Names':['cX','cXy']}
+    }
+    network.graph['cmid2node'] = {'A':1, 'B':2, 'C':3, 'D':4, 'E':5, 'X':6}
+    network.add_node(1, mid='A', type='c', start=True)
+    network.add_node(2, mid='B', type='c', start=False)
+    network.add_node(3, mid='C', type='c', start=False)
+    network.add_node(4, mid='D', type='c', start=False)
+    network.add_node(5, mid='E', type='c', start=False)
+    network.add_node(6, mid='X', type='c', start=True)
+
+    # Set up testing pathways in text format
+    pw_1 = "\n".join([
+        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R2' + "\t" + format_reaction_text(network.graph['mine_data']['R2']),
+        'R3' + "\t" + format_reaction_text(network.graph['mine_data']['R3'])
+    ])
+    pw_2 = "\n".join([
+        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R4' + "\t" + format_reaction_text(network.graph['mine_data']['R4'])
+    ])
+    pw_3 = "\n".join([
+        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R5' + "\t" + format_reaction_text(network.graph['mine_data']['R5'], 1)
+    ])
+    pw_4 = "\n".join([
+        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'RM6' + "\t" + format_reaction_text(network.graph['mine_data']['RM6'], 1)
+    ])
+
+    # Set up the testing MDF dictionary
+    mdf_dict = {pw_1 : 5.0006, pw_2 : 5.0006, pw_3 : 4.3, pw_4 : None}
+
+    # Set up pathways dataframe
+    pw_df, pw_txt = format_mdf_summary(mdf_dict, network)
+
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+
+    exp_html = [
+        '<!DOCTYPE html>',
+        '<html>',
+        '<head>',
+        '  <link rel="stylesheet" href="style.css">',
+        '<base target="_blank">',
+        '</head>',
+        '<body>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td>',
+        '  <h3><b>Report: 4 cD pathways</b></h3>',
+        '  </td>',
+        '  <td>',
+        '    <h5><b>MDF</b></h5>',
+        '  </td>',
+        '  <td>',
+        '    <h5><b>Pathway length</b></h5>',
+        '  </td>',
+        '</tr>',
+        '<tr>',
+        '  <td>',
+        '  <li><h5><b>Report generated on:</b> %s</h5>' % timestamp,
+        '  <li><h5><b>Target compound:</b> cD (D)</h5>',
+        '  <li><h5><b>Reaction depth:</b> 3</h5>',
+        '  <li><h5><b>Reaction limit:</b> 4</h5>',
+        '  <li><h5><b>Number of pathways:</b> 4</h5>',
+        '  <li><h5><b>Feasible/infeasible:</b> 3/1</h5>',
+        '  </td>',
+        '  <td>',
+        '  <img src="mdf_summary.png" style="width: 200px;"/>',
+        '  </td>',
+        '  <td>',
+        '  <img src="length_summary.png" style="width: 200px;"/>',
+        '  </td>',
+        '</tr>',
+        '</table>',
+        '',
+        '<hr>',
+        '',
+        '<h5>Pathway "47afbbd9e7": 5.001 kJ/mol, 2 reactions</h5>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td><a href="http://www.genome.jp/dbget-bin/www_bget?R1">R1</a></td>',
+        '  <td style="background-color:#c7eae5"><a href="http://www.genome.jp/dbget-bin/www_bget?A">cA</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?B">cB</a></td>',
+        '</tr>',
+        '<tr>',
+        '  <td><p>',
+        '    <a href="http://enzyme.expasy.org/EC/1.2.3.-">1.2.3.a*</a><br>',
+        '    <a href="http://enzyme.expasy.org/EC/1.2.3.54">1.2.3.54</a><br>',
+        '  </p></td>',
+        '  <td><img src="cpd_png/A.png" style="width: 75px;"/></td>',
+        '  <td><=></td>',
+        '  <td>2 <img src="cpd_png/B.png" style="width: 75px;"/></td>',
+        '</tr>',
+        '</table>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td><a href="http://www.genome.jp/dbget-bin/www_bget?R4">R4</a></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?B">cB</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#c2a5cf"><a href="http://www.genome.jp/dbget-bin/www_bget?D">cD</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?E">cE</a></td>',
+        '</tr>',
+        '<tr>',
+        '  <td><p>',
+        '    <a href="http://enzyme.expasy.org/EC/4.1.1.-">4.1.-1.4c*</a><br>',
+        '    <a href="http://enzyme.expasy.org/EC/4.1.1.1">4.1.1.1</a><br>',
+        '  </p></td>',
+        '  <td>2 <img src="cpd_png/B.png" style="width: 75px;"/></td>',
+        '  <td><=></td>',
+        '  <td><img src="cpd_png/D.png" style="width: 75px;"/></td>',
+        '  <td>+</td>',
+        '  <td><img src="cpd_png/E.png" style="width: 75px;"/></td>',
+        '</tr>',
+        '</table>',
+        '',
+        '<hr>',
+        '',
+        '<h5>Pathway "8d415da2b3": 5.001 kJ/mol, 3 reactions</h5>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td><a href="http://www.genome.jp/dbget-bin/www_bget?R1">R1</a></td>',
+        '  <td style="background-color:#c7eae5"><a href="http://www.genome.jp/dbget-bin/www_bget?A">cA</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?B">cB</a></td>',
+        '</tr>',
+        '<tr>',
+        '  <td><p>',
+        '    <a href="http://enzyme.expasy.org/EC/1.2.3.-">1.2.3.a*</a><br>',
+        '    <a href="http://enzyme.expasy.org/EC/1.2.3.54">1.2.3.54</a><br>',
+        '  </p></td>',
+        '  <td><img src="cpd_png/A.png" style="width: 75px;"/></td>',
+        '  <td><=></td>',
+        '  <td>2 <img src="cpd_png/B.png" style="width: 75px;"/></td>',
+        '</tr>',
+        '</table>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td><a href="http://www.genome.jp/dbget-bin/www_bget?R2">R2</a></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?B">cB</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?C">cC</a></td>',
+        '</tr>',
+        '<tr>',
+        '  <td><p>',
+        '    <a href="http://enzyme.expasy.org/EC/3.2.1.-">3.2.1.-</a><br>',
+        '  </p></td>',
+        '  <td><img src="cpd_png/B.png" style="width: 75px;"/></td>',
+        '  <td><=></td>',
+        '  <td><img src="cpd_png/C.png" style="width: 75px;"/></td>',
+        '</tr>',
+        '</table>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td><a href="http://www.genome.jp/dbget-bin/www_bget?R3">R3</a></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?C">cC</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#c2a5cf"><a href="http://www.genome.jp/dbget-bin/www_bget?D">cD</a></td>',
+        '</tr>',
+        '<tr>',
+        '  <td><p>',
+        '    <a href="http://enzyme.expasy.org/EC/2.2.2.22">2.2.2.22</a><br>',
+        '    <a href="http://enzyme.expasy.org/EC/2.3.4.-">2.3.-4.c*</a><br>',
+        '  </p></td>',
+        '  <td><img src="cpd_png/C.png" style="width: 75px;"/></td>',
+        '  <td><=></td>',
+        '  <td>2 <img src="cpd_png/D.png" style="width: 75px;"/></td>',
+        '</tr>',
+        '</table>',
+        '',
+        '<hr>',
+        '',
+        '<h5>Pathway "a3943b79d8": 4.300 kJ/mol, 2 reactions</h5>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td><a href="http://www.genome.jp/dbget-bin/www_bget?R1">R1</a></td>',
+        '  <td style="background-color:#c7eae5"><a href="http://www.genome.jp/dbget-bin/www_bget?A">cA</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?B">cB</a></td>',
+        '</tr>',
+        '<tr>',
+        '  <td><p>',
+        '    <a href="http://enzyme.expasy.org/EC/1.2.3.-">1.2.3.a*</a><br>',
+        '    <a href="http://enzyme.expasy.org/EC/1.2.3.54">1.2.3.54</a><br>',
+        '  </p></td>',
+        '  <td><img src="cpd_png/A.png" style="width: 75px;"/></td>',
+        '  <td><=></td>',
+        '  <td>2 <img src="cpd_png/B.png" style="width: 75px;"/></td>',
+        '</tr>',
+        '</table>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td><a href="http://www.genome.jp/dbget-bin/www_bget?R5">R5</a></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?B">cB</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#c2a5cf"><a href="http://www.genome.jp/dbget-bin/www_bget?D">cD</a></td>',
+        '</tr>',
+        '<tr>',
+        '  <td><p>',
+        '    <a href="http://enzyme.expasy.org/EC/1.3.1.78">1.3.1.78</a><br>',
+        '    <a href="http://enzyme.expasy.org/EC/1.3.1.79">1.3.1.79</a><br>',
+        '  </p></td>',
+        '  <td><img src="cpd_png/B.png" style="width: 75px;"/></td>',
+        '  <td><=></td>',
+        '  <td><img src="cpd_png/D.png" style="width: 75px;"/></td>',
+        '</tr>',
+        '</table>',
+        '',
+        '<hr>',
+        '',
+        '<h5>Pathway "560b193f2a": MDF FAILED, 2 reactions</h5>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td><a href="http://www.genome.jp/dbget-bin/www_bget?R1">R1</a></td>',
+        '  <td style="background-color:#c7eae5"><a href="http://www.genome.jp/dbget-bin/www_bget?A">cA</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?B">cB</a></td>',
+        '</tr>',
+        '<tr>',
+        '  <td><p>',
+        '    <a href="http://enzyme.expasy.org/EC/1.2.3.-">1.2.3.a*</a><br>',
+        '    <a href="http://enzyme.expasy.org/EC/1.2.3.54">1.2.3.54</a><br>',
+        '  </p></td>',
+        '  <td><img src="cpd_png/A.png" style="width: 75px;"/></td>',
+        '  <td><=></td>',
+        '  <td>2 <img src="cpd_png/B.png" style="width: 75px;"/></td>',
+        '</tr>',
+        '</table>',
+        '',
+        '<table border=0>',
+        '<tr>',
+        '  <td>RM6</td>',
+        '  <td style="background-color:#f6e8c3"><a href="http://www.genome.jp/dbget-bin/www_bget?B">cB</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#c2a5cf"><a href="http://www.genome.jp/dbget-bin/www_bget?D">cD</a></td>',
+        '  <td></td>',
+        '  <td style="background-color:#c7eae5"><a href="http://www.genome.jp/dbget-bin/www_bget?X">cX</a></td>',
+        '</tr>',
+        '<tr>',
+        '  <td><p>',
+        '    <a href="http://enzyme.expasy.org/EC/3.1.1.-">3.1.1.b*</a><br>',
+        '  </p></td>',
+        '  <td><img src="cpd_png/B.png" style="width: 75px;"/></td>',
+        '  <td><=></td>',
+        '  <td><img src="cpd_png/D.png" style="width: 75px;"/></td>',
+        '  <td>+</td>',
+        '  <td><img src="cpd_png/X.png" style="width: 75px;"/></td>',
+        '</tr>',
+        '</table>',
+        ''
+    ]
+
+    auto_html = format_pathway_html(pw_df, network, 4, 3, 4)
+
+    for line in enumerate(auto_html.split("\n")):
+        print(line[1])
+        print(exp_html[line[0]])
+        assert line[1] == exp_html[line[0]]
+
+
 # Main code block
 def main(infile_name, compound, start_comp_id_file, exact_comp_id,
-    rxn_lim, depth, n_procs, sub_network_out, outfile_name,
-    pathway_text):
+    rxn_lim, depth, n_procs, sub_network_out, pathway_pickle,
+    pathway_text, pathway_html, n_pw_out, bounds, ratios, dfG_json, pH, T, R):
 
     # Default results are empty
     results = {}
@@ -1496,45 +2124,155 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
         s_out(" Done.\n")
 
     # Enumerate pathways and save results
-    if outfile_name or pathway_text:
+    if pathway_pickle or pathway_text or pathway_html:
+
         pathways = paths_to_pathways(network, paths, target_node, rxn_lim)
-        if outfile_name:
+
+        if pathway_pickle:
             s_out("\nWriting pathways to pickle...")
-            pickle.dump(pathways, open(outfile_name, 'wb'))
+            pickle.dump(pathways, open(pathway_pickle, 'wb'))
             s_out(" Done.\n")
+
         if pathway_text:
             s_out("\nWriting pathways to text...")
             with open(pathway_text, 'w') as txt:
                 txt.write(format_pathway_text(network, pathways, target_node))
             s_out(" Done.\n")
 
+        if pathway_html:
+
+            # Format pathways so that ranking functions can read them
+            pw_rank_txt = format_pathway_text(network, pathways, target_node)
+            pw_rank = rank.read_pathways_text(pw_rank_txt)
+
+            # Load standard formation Gibbs energy dictionary
+            dfG_dict = rank.load_dfG_dict(pw_rank, pH, dfG_json)
+
+            # Load inequality constraints
+            if bounds:
+                ne_con_text = open(bounds,'r').read()
+            else:
+                ne_con_text = ""
+
+            ne_con = rank.mdf.read_constraints(ne_con_text)
+
+            # Load equality constraints
+            if ratios:
+                eq_con_text = open(ratios,'r').read()
+            else:
+                eq_con_text = ""
+
+            eq_con = rank.mdf.read_ratio_constraints(eq_con_text)
+
+            # Perform MDF
+            mdf_dict = rank.pathways_to_mdf(
+                pw_rank, dfG_dict, ne_con, eq_con, n_procs, T, R
+            )
+
+            # Create output directory structure
+            out_dir = os.path.abspath(pathway_html)
+            rxn_file = os.path.join(out_dir, 'reactions.txt')
+            pw_file = os.path.join(out_dir, 'pathways.txt')
+            mdf_fig = os.path.join(out_dir, 'mdf_summary.png')
+            len_fig = os.path.join(out_dir, 'length_summary.png')
+            html_file = os.path.join(out_dir, 'report.html')
+            css_file = os.path.join(out_dir, 'style.css')
+
+            try:
+                # Exit if the directory already exists
+                os.stat(out_dir)
+                sys.exit("Error: HTML output directory already exists.\n")
+            except:
+                os.mkdir(out_dir)
+
+            os.mkdir(os.path.join(out_dir, 'cpd_png'))
+
+            # Format and write reactions to text file
+            pw_nodes = set([n for p in pathways for n in p])
+            pw_rxn_ids = sorted(list(set([
+                network.node[n]['mid'] for n in pw_nodes \
+                if network.node[n]['type'] != 'c'
+            ])))
+
+            with open(rxn_file, 'w') as f:
+                for rxn_id in pw_rxn_ids:
+                    rxn = network.graph['mine_data'][rxn_id]
+                    rxn_txt = format_reaction_text(rxn)
+                    f.write(rxn_id + "\t" + rxn_txt + "\n")
+
+            # Format and write pathways summary to text file
+            pw_df, pw_sum = format_mdf_summary(mdf_dict, network)
+            with open(pw_file, 'w') as f:
+                f.write(pw_sum)
+
+            # Create summary figures; call external R script
+            sub.call([
+                'Rscript', '--vanilla',
+                os.path.join(repo_dir, 'mepmap_sumfigs.R'),
+                pw_file,
+                mdf_fig,
+                len_fig
+            ])
+
+            # Load image dictionary
+            cpd_img_file = os.path.join(repo_dir, 'data/mol_png_images.pkl.gz')
+            cpd_images = pickle.load(gzip.open(cpd_img_file))
+
+            # Populate compound image directory
+            compounds = set()
+            for pw_row in pw_df.head(n_pw_out).iterrows():
+                rxn_rows = filter(None, pw_row[1]['pw_txt'].split("\n"))
+                for rxn_id in [r.split("\t")[0] for r in rxn_rows]:
+                    rxn = network.graph['mine_data'][rxn_id]
+                    cpd_ids = extract_reaction_comp_ids(rxn)
+                    compounds = compounds.union(cpd_ids)
+
+            for cpd in compounds:
+                img_file = os.path.join(out_dir, 'cpd_png', cpd + '.png')
+                with open(img_file, 'wb') as f:
+                    try:
+                        f.write(cpd_images[cpd])
+                    except KeyError:
+                        s_err("Warning: No image found for '%s'." % cpd)
+
+            # Add CSS file to HTML directory
+            css_loc = os.path.join(repo_dir, 'data/style.css')
+            copyfile(css_loc, css_file)
+
+            # Format and write pathways summary with top X to HTML
+            html = format_pathway_html(
+                        pw_df, network, target_node,
+                        depth, rxn_lim, n_pw_out
+                        )
+
+            with open(html_file, 'w') as f:
+                f.write(html)
+
 
 if __name__ == "__main__":
     # Read arguments from the commandline
     parser = argparse.ArgumentParser()
+
+    # Required input: Reaction network and target compound
     parser.add_argument(
         'infile',
-        help='Read mepmap network pickle.'
+        help='Read reaction network pickle.'
     )
     parser.add_argument(
         'compound', type=str, default=False,
         help='Target compound.'
     )
+
+    # Number of processes to run for path-finding and MDF analysis
+    parser.add_argument(
+        '-p', '--processes', type=int, default=1,
+        help='Number of parallel processes to run.'
+    )
+
+    # Pathway enumeration parameters
     parser.add_argument(
         '-S', '--start_comp_ids', type=str,
         help='Provide new starting compounds in a file.'
-    )
-    parser.add_argument(
-        '-o', '--outfile', type=str, default=False,
-        help='Save identified pathways in pickle.'
-    )
-    parser.add_argument(
-        '-t', '--pathway_text', type=str, default=False,
-        help='Save identified pathways as a text file.'
-    )
-    parser.add_argument(
-        '-s', '--sub_network', type=str, default=False,
-        help='Save sub-network as graphml (requires -c).'
     )
     parser.add_argument(
         '-e', '--exact_comp_id', action='store_true',
@@ -1548,11 +2286,62 @@ if __name__ == "__main__":
         '-d', '--depth', type=int, default=5,
         help='Maximum direct path depth.'
     )
+
+    # Output options
     parser.add_argument(
-        '-p', '--processes', type=int, default=1,
-        help='Number of parallel processes to run.'
+        '--pathway_pickle', type=str, default=False,
+        help='Save identified pathways in pickle.'
     )
+    parser.add_argument(
+        '--pathway_text', type=str, default=False,
+        help='Save identified pathways as a text file.'
+    )
+    parser.add_argument(
+        '--pathway_html', type=str, default=False,
+        help='Save ranked pathway html output to directory.'
+    )
+    parser.add_argument(
+        '--sub_network', type=str, default=False,
+        help='Save sub-network as graphml.'
+    )
+    parser.add_argument(
+        '--n_html_pathways', type=int, default=200,
+        help='The number of pathways to save in HTML output.'
+    )
+
+    # MDF analysis
+    parser.add_argument(
+        '--bounds', type=str,
+        help='Read metabolite concentration bounds (inequality constraints).'
+    )
+    parser.add_argument(
+        '--ratios', type=str,
+        help='Read metabolite concentration ratios (equality constraints).'
+    )
+    parser.add_argument(
+        '--gibbs', type=str,
+        help='Read transformed Gibbs standard formation energies (JSON).'
+    )
+    parser.add_argument(
+        '--pH', type=float, default=7.0,
+        help='Specify the pH for the thermodynamics calculations.'
+    )
+    parser.add_argument(
+        '-T', type=float, default=298.15,
+        help='Temperature (K).'
+    )
+    parser.add_argument(
+        '-R', type=float, default=8.31e-3,
+        help='Universal gas constant (kJ/(mol*K)).'
+    )
+
     args = parser.parse_args()
-    main(args.infile, args.compound, args.start_comp_ids, args.exact_comp_id,
-    args.reactions, args.depth, args.processes, args.sub_network, args.outfile,
-    args.pathway_text)
+
+    # Run main function
+    main(
+        args.infile, args.compound, args.start_comp_ids, args.exact_comp_id,
+        args.reactions, args.depth, args.processes, args.sub_network,
+        args.pathway_pickle, args.pathway_text, args.pathway_html,
+        args.n_html_pathways, args.bounds, args.ratios, args.gibbs, args.pH,
+        args.T,args.R
+    )

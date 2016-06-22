@@ -614,10 +614,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '-T', type=float, default=298.15,
-        help='Temperature (K).')
+        help='Temperature (K).'
+    )
     parser.add_argument(
         '-R', type=float, default=8.31e-3,
-        help='Universal gas constant (kJ/(mol*K)).')
+        help='Universal gas constant (kJ/(mol*K)).'
+    )
     parser.add_argument(
         'pathways', type=str,
         help='Read mepmap pathways text file.'

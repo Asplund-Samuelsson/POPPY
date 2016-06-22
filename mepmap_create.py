@@ -4,6 +4,7 @@
 import networkx as nx
 import re
 import sys
+import os
 import argparse
 import pickle
 import time
@@ -23,6 +24,10 @@ from mepmap_origin_helpers import *
 from mepmap_KEGG_helpers import *
 from progress import Progress
 from equilibrator_query import *
+
+# Specify path to repository
+global repo_dir
+repo_dir = os.path.dirname(__file__)
 
 # Define functions
 def allow_reaction_listing(kegg_comp, kegg_rxn):
@@ -3477,7 +3482,7 @@ def KEGG_rxns_Equilibrator_filter(rxns):
     #    if eq_results[query]:
     #        valid_comp_ids.add(query[0])
 
-    valid_file = '/ssd/common/db/equilibrator/equilibrator_compatible_KEGG_IDs.pickle'
+    valid_file = os.path.join(repo_dir, 'data/eq_KEGG_IDs.pkl')
     valid_comp_ids = pickle.load(open(valid_file,'rb'))
 
     # Identify invalid reactions
