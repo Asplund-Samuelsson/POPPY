@@ -20,10 +20,10 @@ from shutil import copyfile
 # Import scripts
 from progress import Progress
 import mineclient3 as mc
-from mepmap_origin_helpers import *
-from mepmap_helpers import *
-import mepmap_rank as rank
-from mepmap_create import extract_reaction_comp_ids
+from poppy_origin_helpers import *
+from poppy_helpers import *
+import poppy_rank as rank
+from poppy_create import extract_reaction_comp_ids
 
 # Specify path to repository
 global repo_dir
@@ -761,7 +761,7 @@ def format_graphml(network, subnet):
     return outnet
 
 
-def paths_to_pathways(network, paths, target_node, rxn_lim=10):
+def paths_to_pathways(network, paths, target_node, rxn_lim=10, shallow=False):
     """Enumerate complete branched pathways capable of producing the target"""
 
     # Function for determining whether a path is part of a network
@@ -821,6 +821,10 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10):
                 offset = 0
                 while True:
                     path_segs.append(path[i - (1 + offset):i + 1])
+                    # If shallow enumeration is desired
+                    if shallow:
+                        # Stop construction after a single step
+                        break
                     try:
                         # If the upstream compound node is not start
                         if not subnet.node[path[i - (2 + offset)]]['start']:
@@ -1039,9 +1043,17 @@ def test_paths_to_pathways():
     frozenset(set([201,202,6,301,302]).union(req_1)),
     frozenset([401,402,40,403,404,13])
     }
+    expected_branched_paths_shallow = {
+    frozenset(set([101,102,3,105,106]).union(req_1)),
+    frozenset(set([103,104,3,105,106]).union(req_1)),
+    frozenset(set([301,302]).union(req_1)),
+    frozenset([401,402,40,403,404,13])
+    }
 
     # Letting the automated functions produce a result
     paths = generate_paths(G, 13, 5, quiet=True)
+
+    # Standard procedure
     output_branched_paths = paths_to_pathways(G, paths, 13)
 
     paths_equal = True
@@ -1062,6 +1074,28 @@ def test_paths_to_pathways():
 
     assert paths_equal
     assert len(expected_branched_paths) == len(output_branched_paths)
+
+    # Shallow enumeration
+    shallow_pathways = paths_to_pathways(G, paths, 13, shallow=True)
+
+    paths_equal = True
+    missing = []
+    unexpected = []
+    for path in expected_branched_paths_shallow:
+        if path not in shallow_pathways:
+            paths_equal = False
+            missing.append(sorted(list(path)))
+    for path in shallow_pathways:
+        if path not in expected_branched_paths_shallow:
+            paths_equal = False
+            unexpected.append(sorted(list(path)))
+
+    if not paths_equal:
+        s_err("Missing: " + str(missing) + "\n")
+        s_err("Unexpected: " + str(unexpected) + "\n")
+
+    assert paths_equal
+    assert len(expected_branched_paths_shallow) == len(shallow_pathways)
 
     # Check the reaction limit
     exp_limited_paths = {
@@ -2084,7 +2118,7 @@ def test_format_pathway_html():
 
 # Main code block
 def main(infile_name, compound, start_comp_id_file, exact_comp_id,
-    rxn_lim, depth, n_procs, sub_network_out, pathway_pickle,
+    rxn_lim, depth, n_procs, sub_network_out, pathway_pickle, shallow,
     pathway_text, pathway_html, n_pw_out, bounds, ratios, dfG_json, pH, T, R):
 
     # Default results are empty
@@ -2126,7 +2160,9 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
     # Enumerate pathways and save results
     if pathway_pickle or pathway_text or pathway_html:
 
-        pathways = paths_to_pathways(network, paths, target_node, rxn_lim)
+        pathways = paths_to_pathways(
+            network, paths, target_node, rxn_lim, shallow
+        )
 
         if pathway_pickle:
             s_out("\nWriting pathways to pickle...")
@@ -2208,7 +2244,7 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
             # Create summary figures; call external R script
             sub.call([
                 'Rscript', '--vanilla',
-                os.path.join(repo_dir, 'mepmap_sumfigs.R'),
+                os.path.join(repo_dir, 'poppy_sumfigs.R'),
                 pw_file,
                 mdf_fig,
                 len_fig
@@ -2286,6 +2322,10 @@ if __name__ == "__main__":
         '-d', '--depth', type=int, default=5,
         help='Maximum direct path depth.'
     )
+    parser.add_argument(
+        '--shallow', action='store_true', default=False,
+        help='Shallow enumeration; do not go through start compounds.'
+    )
 
     # Output options
     parser.add_argument(
@@ -2341,7 +2381,7 @@ if __name__ == "__main__":
     main(
         args.infile, args.compound, args.start_comp_ids, args.exact_comp_id,
         args.reactions, args.depth, args.processes, args.sub_network,
-        args.pathway_pickle, args.pathway_text, args.pathway_html,
+        args.pathway_pickle, args.shallow, args.pathway_text, args.pathway_html,
         args.n_html_pathways, args.bounds, args.ratios, args.gibbs, args.pH,
-        args.T,args.R
+        args.T, args.R
     )

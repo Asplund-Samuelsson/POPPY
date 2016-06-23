@@ -10,7 +10,6 @@ import itertools
 import argparse
 
 # Import scripts
-sys.path.append("/home/johannes/proj/main/tools/pykegg/")
 import pykegg
 
 # Define functions

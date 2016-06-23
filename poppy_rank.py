@@ -16,8 +16,8 @@ import hashlib
 # Import scripts
 from progress import Progress
 import mineclient3 as mc
-from mepmap_origin_helpers import *
-from mepmap_helpers import *
+from poppy_origin_helpers import *
+from poppy_helpers import *
 import mdf
 from equilibrator_query import *
 
@@ -622,7 +622,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         'pathways', type=str,
-        help='Read mepmap pathways text file.'
+        help='Read poppy pathways text file.'
     )
     parser.add_argument(
         'outfile', type=str, default=False,

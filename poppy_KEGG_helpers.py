@@ -10,7 +10,7 @@ from requests import get as rget
 from rdkit import Chem
 
 # Import scripts
-from mepmap_helpers import *
+from poppy_helpers import *
 from progress import Progress
 
 # Define functions

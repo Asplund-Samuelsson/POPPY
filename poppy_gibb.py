@@ -16,9 +16,9 @@ from itertools import product
 # Import scripts
 from progress import Progress
 import mineclient3 as mc
-from mepmap_origin_helpers import *
-from mepmap_helpers import *
-from mepmap_KEGG_helpers import *
+from poppy_origin_helpers import *
+from poppy_helpers import *
+from poppy_KEGG_helpers import *
 from equilibrator_query import equilibrator_gibbf, threaded_equilibrator_gibbf
 
 # Define functions
