@@ -59,15 +59,6 @@ def equilibrator_gibbf(kegg_comp_id, pH=7.0, ionic_strength=0.1):
         else:
             sleep(2)
 
-def test_equilibrator_gibbf():
-    # http://equilibrator.weizmann.ac.il/compound?compoundId=C09908&ph=6.75&ionic_strength=0.175
-    assert equilibrator_gibbf("C09908", pH=6.75, ionic_strength=0.175) == (482.2, 7.1)
-    assert equilibrator_gibbf("C06142") == (234.0, 4.8)
-    assert equilibrator_gibbf("C06142", 4) == (62.9, 4.8)
-    assert equilibrator_gibbf("C00229") is None # ACP (C00229) does not have a value
-    assert equilibrator_gibbf("C99999") is None
-    assert equilibrator_gibbf("C01102", 8.75, 0.125) == (-955.8, 3.0)
-
 
 def threaded_equilibrator_gibbf(queries):
     """Threaded implementation of equilibrator_gibbf."""
@@ -130,22 +121,3 @@ def threaded_equilibrator_gibbf(queries):
         results[result[0]] = result[1]
 
     return results
-
-def test_threaded_equilibrator_gibbf():
-    queries = [
-        ("C09908", 6.75, 0.175),
-        ("C06142",),
-        ("C06142",4),
-        ("C00229",),
-        ("C99999",),
-        ("C01102", 8.75, 0.125)
-    ]
-    results = {
-        ("C09908", 6.75, 0.175):(482.2, 7.1),
-        ("C06142",):(234.0, 4.8),
-        ("C06142",4):(62.9, 4.8),
-        ("C00229",):None,
-        ("C99999",):None,
-        ("C01102", 8.75, 0.125):(-955.8, 3.0)
-    }
-    assert threaded_equilibrator_gibbf(queries) == results
