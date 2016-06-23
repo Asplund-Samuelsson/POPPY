@@ -1,2 +1,4 @@
 .cache
 __pycache__
+tests/.cache
+tests/__pycache__
