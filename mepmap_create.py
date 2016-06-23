@@ -3833,7 +3833,9 @@ def is_balanced(reaction, comp_dict):
     """Determines whether the reaction is balanced"""
     def increment_elements(elements, n, comp_id):
         try:
-            formula = Counter(formula_to_dict(comp_dict[comp_id]['Formula']))
+            formula = Counter(
+                formula_to_dict(comp_dict[comp_id]['Formula'], H=True)
+            )
             for i in range(n):
                 elements = elements + formula
         except KeyError:
@@ -3860,7 +3862,7 @@ def test_is_balanced():
 
     # Get unbalanced reactions from KEGG
     unbalanced_rxns = get_KEGG_rxns([
-        'R01725','R08609','R05539'
+        'R01725','R08609','R05539','R02129'
         ])
 
     # Get the compounds from KEGG
