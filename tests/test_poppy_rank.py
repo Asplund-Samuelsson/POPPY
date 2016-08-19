@@ -4,6 +4,9 @@
 import os, sys
 sys.path.append(os.path.join(os.path.dirname(__file__), os.pardir))
 
+# Import testing utilities
+from numpy.testing import assert_almost_equal
+
 # Import the script to be tested
 from poppy_rank import *
 
@@ -149,9 +152,10 @@ def test_load_dfG_dict():
 def test_drGs_for_pathway():
     pathway = "\n".join(["R1\tC1 + 2 C2 <=> C3",
                          "R2\tC3 <=> C4",
-                         "R3\tC4 + C5 <=> C6 + C7"])
+                         "R3\tC4 + C5 <=> C6 + C7",
+                         "R4\tC2_[cyt] + C3 <=> C2_[ext] + C4"])
     dfG_dict = {"C1":-1, "C2":2, "C3":-2, "C4":5, "C5":-3, "C6":10, "C7":-2}
-    exp_drGs = {"R1":-5.0, "R2":7.0, "R3":6.0}
+    exp_drGs = {"R1":-5.0, "R2":7.0, "R3":6.0, "R4":7.0}
     assert drGs_for_pathway(pathway, dfG_dict) == exp_drGs
 
 
@@ -167,7 +171,7 @@ def test_pathways_to_mdf():
     ]
 
     # Set all dfGs to -1
-    dfG_dict = dict(zip(['C' + str(i) for i in range(1,9)], [-1]*8))
+    dfG_dict = dict(zip(['C' + str(i) for i in range(1,10)], [-1]*9))
     dfG_dict.update(dict(zip(['X' + str(i) for i in range(1,9)], [-1]*8)))
     dfG_dict.update(dict(zip(['Z' + str(i) for i in range(1,3)], [-1]*8)))
 
@@ -212,6 +216,12 @@ def test_pathways_to_mdf():
     eq_con = mdf.read_ratio_constraints("X1\tX3\t1\nZ1\tZ2\t1")
 
     assert pathways_to_mdf(pathways, dfG_dict, ne_con, eq_con) == pw_mdf_dict
+
+    # Pathway 1 with a background network
+    nt = "R7\tC1 + C6 <=> C9\nR8\tC8 + X3 <=> X1 + C4"
+    exp_mdf = 19.967310457
+    mdf_dict = pathways_to_mdf([pathways[0]], dfG_dict, ne_con, eq_con, network_text=nt)
+    assert_almost_equal(exp_mdf, mdf_dict[pathways[0]])
 
 
 def test_format_output():

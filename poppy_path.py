@@ -946,7 +946,8 @@ def format_pathway_html(pw_df, network, target_node, depth, rxn_lim, n_pw=200):
 # Main code block
 def main(infile_name, compound, start_comp_id_file, exact_comp_id,
     rxn_lim, depth, n_procs, sub_network_out, pathway_pickle, shallow,
-    pathway_text, pathway_html, n_pw_out, bounds, ratios, dfG_json, pH, T, R):
+    pathway_text, pathway_html, n_pw_out, bounds, ratios, dfG_json, net_file,
+    pH, T, R):
 
     # Default results are empty
     results = {}
@@ -1011,6 +1012,12 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
             # Load standard formation Gibbs energy dictionary
             dfG_dict = rank.load_dfG_dict(pw_rank, pH, dfG_json)
 
+            # Load metabolic network text
+            if net_file:
+                net_text = open(net_file, 'r').read()
+            else:
+                net_text = ""
+
             # Load inequality constraints
             if bounds:
                 ne_con_text = open(bounds,'r').read()
@@ -1029,7 +1036,7 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
 
             # Perform MDF
             mdf_dict = rank.pathways_to_mdf(
-                pw_rank, dfG_dict, ne_con, eq_con, n_procs, T, R
+                pw_rank, dfG_dict, ne_con, eq_con, n_procs, T, R, net_text
             )
 
             # Create output directory structure
@@ -1190,6 +1197,10 @@ if __name__ == "__main__":
         help='Read transformed Gibbs standard formation energies (JSON).'
     )
     parser.add_argument(
+        '--model', type=str,
+        help='Read reactions corresponding to a reduced network model.'
+    )
+    parser.add_argument(
         '--pH', type=float, default=7.0,
         help='Specify the pH for the thermodynamics calculations.'
     )
@@ -1209,6 +1220,6 @@ if __name__ == "__main__":
         args.infile, args.compound, args.start_comp_ids, args.exact_comp_id,
         args.reactions, args.depth, args.processes, args.sub_network,
         args.pathway_pickle, args.shallow, args.pathway_text, args.pathway_html,
-        args.n_html_pathways, args.bounds, args.ratios, args.gibbs, args.pH,
-        args.T, args.R
+        args.n_html_pathways, args.bounds, args.ratios, args.gibbs, args.model,
+        args.pH, args.T, args.R
     )

@@ -165,6 +165,92 @@ def test_mdf_A():
     np.testing.assert_array_equal(A1, mdf_A(S1))
     np.testing.assert_array_equal(A2, mdf_A(S2))
 
+    # Test construction of a network-embedded A matrix, where the MDF is only
+    # optimized based on the pathway in focus
+
+    # Name the reactions in S
+    S1.columns = ['R1','R2','R3']
+    S2.columns = ['R4','R5','R6','R7']
+
+    # Specify the "network"
+    net1a = ['R2']
+    net1b = ['R1','R3']
+    net1c = False
+    net2a = ['R5']
+    net2b = ['R7','R6']
+    net2c = ['R7','R6','R5','R4']
+
+    # Expected A matrices
+    A_net1a = np.matrix([
+        [ 1, -1,  0, 1],
+        [ 0,  1, -1, 0],
+        [-1, -1,  2, 1],
+        [ 1,  0,  0, 0],
+        [ 0,  1,  0, 0],
+        [ 0,  0,  1, 0],
+        [-1,  0,  0, 0],
+        [ 0, -1,  0, 0],
+        [ 0,  0, -1, 0]
+    ])
+    A_net1b = np.matrix([
+        [ 1, -1,  0, 0],
+        [ 0,  1, -1, 1],
+        [-1, -1,  2, 0],
+        [ 1,  0,  0, 0],
+        [ 0,  1,  0, 0],
+        [ 0,  0,  1, 0],
+        [-1,  0,  0, 0],
+        [ 0, -1,  0, 0],
+        [ 0,  0, -1, 0]
+    ])
+    A_net1c = np.matrix([
+        [ 1, -1,  0, 1],
+        [ 0,  1, -1, 1],
+        [-1, -1,  2, 1],
+        [ 1,  0,  0, 0],
+        [ 0,  1,  0, 0],
+        [ 0,  0,  1, 0],
+        [-1,  0,  0, 0],
+        [ 0, -1,  0, 0],
+        [ 0,  0, -1, 0]
+    ])
+    A_net2a = np.matrix([
+        [ 1,  0,  1],
+        [ 0, -1,  0],
+        [ 0,  2,  1],
+        [-1,  0,  1],
+        [ 1,  0,  0],
+        [ 0,  1,  0],
+        [-1,  0,  0],
+        [ 0, -1,  0]
+    ])
+    A_net2b = np.matrix([
+        [ 1,  0,  1],
+        [ 0, -1,  1],
+        [ 0,  2,  0],
+        [-1,  0,  0],
+        [ 1,  0,  0],
+        [ 0,  1,  0],
+        [-1,  0,  0],
+        [ 0, -1,  0]
+    ])
+    A_net2c = np.matrix([
+        [ 1,  0,  0],
+        [ 0, -1,  0],
+        [ 0,  2,  0],
+        [-1,  0,  0],
+        [ 1,  0,  0],
+        [ 0,  1,  0],
+        [-1,  0,  0],
+        [ 0, -1,  0]
+    ])
+    np.testing.assert_array_equal(A_net1a, mdf_A(S1, net1a))
+    np.testing.assert_array_equal(A_net1b, mdf_A(S1, net1b))
+    np.testing.assert_array_equal(A_net1c, mdf_A(S1, net1c))
+    np.testing.assert_array_equal(A_net2a, mdf_A(S2, net2a))
+    np.testing.assert_array_equal(A_net2b, mdf_A(S2, net2b))
+    np.testing.assert_array_equal(A_net2c, mdf_A(S2, net2c))
+
 
 def test_mdf_b():
     RT = 8.31e-3 * 298.15

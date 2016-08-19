@@ -212,14 +212,21 @@ def mdf_c(S):
     return np.array([0]*S.shape[0] + [1])
 
 
-def mdf_A(S):
+def mdf_A(S, net_rxns = []):
     """Constructs the MDF A matrix."""
     # Transposed S in top left corner
     A = np.array(S.T)
     # Below; pos. and neg. identity matrices with same row number as S
     A = np.concatenate((A, np.eye(S.shape[0]), -np.eye(S.shape[0])), axis=0)
-    # Pad right side with 1's (S column number) and 0's (2 x S row number)
-    A = np.column_stack((A, np.array([1]*S.shape[1] + [0]*S.shape[0]*2)))
+    # Pad right side differently depending on whether a network is specified
+    if not net_rxns:
+        # Pad with 1's (S column number) and 0's (2 x S row number)
+        A = np.column_stack((A, np.array([1]*S.shape[1] + [0]*S.shape[0]*2)))
+    else:
+        # Pad with 1's or 0's (depending on reaction status; S column number),
+        # and 0's (2 x S row number)
+        mdf_vector = [0 if R in net_rxns else 1 for R in S.columns]
+        A = np.column_stack((A, np.array(mdf_vector + [0]*S.shape[0]*2)))
     return np.matrix(A)
 
 

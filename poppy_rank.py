@@ -12,6 +12,7 @@ from itertools import product
 from decimal import Decimal
 import json
 import hashlib
+import pandas as pd
 
 # Import scripts
 from progress import Progress
@@ -134,16 +135,26 @@ def drGs_for_pathway(pathway, dfG_dict):
     for reaction in pathway.split("\n"):
         r_id = reaction.split("\t")[0]
         r_eq = reaction.split("\t")[1]
+        # Remove compartment tags from compound IDs
+        r_eq = re.sub("_\[[a-z]{3}\]", "", r_eq)
         drGs[r_id] = reaction_gibbs(r_eq, dfG_dict)
     return drGs
 
 
 def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
-    T=298.15, R=8.31e-3):
+    T=298.15, R=8.31e-3, network_text=""):
     """Create a dictionary with pathways and their MDF values"""
 
+    # The cytosol is selected as the default compartment
+    # This is where the pathway reactions take place
+    # The "_[cyt]" tag will be removed
+    network_text = network_text.replace("_[cyt]", "")
+
+    # Create a stoichiometric matrix of the background network
+    S_net = mdf.read_reactions(network_text)
+
     # Define the worker
-    def worker(dfGs):
+    def worker(dfGs, S_net):
         while True:
             pw_int_chunk = work.get()
             if pw_int_chunk is None:
@@ -152,18 +163,23 @@ def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
             for pathway, pw_int in [(pathways[n], n) for n in pw_int_chunk]:
 
                 # Construct standard reaction Gibbs energy dataframe
-                drGs_d = drGs_for_pathway(pathway, dfGs)
+                if network_text:
+                    pathway_and_network = pathway.strip() + "\n" + network_text.strip()
+                else:
+                    pathway_and_network = pathway
+                drGs_d = drGs_for_pathway(pathway_and_network, dfGs)
                 drGs_t = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_d.items()])
                 drGs = mdf.read_reaction_drGs(drGs_t)
 
                 # Construct stoichiometric matrix
-                S = mdf.read_reactions(pathway)
+                S_pat = mdf.read_reactions(pathway)
+                S = pd.concat([S_pat, S_net], axis={0,1}).fillna(0)
 
                 # Construct c vector
                 c = mdf.mdf_c(S)
 
                 # Construct A matrix
-                A = mdf.mdf_A(S)
+                A = mdf.mdf_A(S, list(S_net.columns))
 
                 # Construct b vector
                 b = mdf.mdf_b(S, drGs, ne_con)
@@ -231,7 +247,7 @@ def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
         # Start processes
         procs = []
         for i in range(n_procs):
-            p = mp.Process(target=worker, args=(dfGs,))
+            p = mp.Process(target=worker, args=(dfGs, S_net))
             procs.append(p)
             p.start()
 
