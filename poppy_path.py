@@ -77,24 +77,19 @@ def generate_paths(network, target_node, reaction_limit, n_procs=1, quiet=False)
 
     # Set up reporter thread
     def reporter():
-        t_start = time.time()
         n_left = Work.qsize()
+        time_p = Progress(design = 't', max_val = n_work)
+        prog_p = Progress(design = 'p', max_val = n_work)
+        status_format = "{0:<10} {1:<25} {2:<25}"
         while n_left > 0:
             # Check progress
             n_made = len(output)
             n_left = Work.qsize()
             n_done = n_work - n_left
             # Calculate speed and time left
-            speed = n_done / (time.time()-t_start)
-            if n_done != 0:
-                t_left = round(n_left / speed)
-                t_left_str = str(delta(seconds=t_left))
-            else:
-                t_left_str = '.:..:..'
-            status_format = "{0:<10} {1:<25} {2:<25}"
-            progress = "%0.1f%%" % float(n_done / n_work * 100)
+            progress = prog_p.to_string(n_done)
             found = str(n_made) + " paths found."
-            t_out = "Time left: " + t_left_str
+            t_out = "Time left: " + time_p.to_string(n_done)
             status = status_format.format(progress, found, t_out)
             s_out('\r' + status)
             time.sleep(1)
@@ -991,6 +986,10 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
         pathways = paths_to_pathways(
             network, paths, target_node, rxn_lim, shallow
         )
+
+        # If there are no pathways, exit with an error message
+        if not pathways:
+            sys.exit("\nError: Could not construct any complete pathways.\n")
 
         if pathway_pickle:
             s_out("\nWriting pathways to pickle...")
