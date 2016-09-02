@@ -60,10 +60,18 @@ if __name__ == "__main__":
     # Read arguments from the commandline
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        'pHs', type=str,
+        help="Comma-separated list of pHs for which to download Equilibrator data."
+    )
+    parser.add_argument(
         'outfile', type=str, default=False,
         help='Write KEGG compound transformed standard formation Gibbs energies to json file.'
     )
+
     args = parser.parse_args()
+
+    # Parse pHs
+    pHs = [float(x) for x in args.pHs.split(",")]
 
     # Download KEGG compound IDs
     s_out("Downloading KEGG compound list...")
@@ -78,7 +86,5 @@ if __name__ == "__main__":
         msg = "Error: Unable to download KEGG rest compound list.\n"
         sys.exit(msg)
     s_out(" Done.\n")
-
-    pHs = [6.8, 7.4, 8.0]
 
     main(compounds, args.outfile, pHs)
