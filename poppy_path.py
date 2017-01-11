@@ -554,7 +554,7 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10, shallow=False):
     return finished_pathways
 
 
-def parse_compound(compound, network):
+def parse_compound(compound, network, return_set=False):
     """Determines the type of compound identifier and returns the node."""
 
     node = None
@@ -565,16 +565,22 @@ def parse_compound(compound, network):
     if mid_match:
         try:
             node = network.graph['cmid2node'][compound]
+            if return_set:
+                return {node}
             if not node in network.nodes():
                 s_err("Error: MINE ID '" + compound + \
                 "' appears to not be available in the network.\n")
                 node = None
         except KeyError:
+            if return_set:
+                return set()
             s_err("Error: MINE ID '" + compound + \
             "' appears to not be available in the network.\n")
     elif kegg_match:
         try:
             nodes = network.graph['kegg2nodes'][compound]
+            if return_set:
+                return set(nodes)
             if len(nodes) > 1:
                 nodes = "'\n'".join(
                     sorted([network.node[n]['mid'] for n in nodes])
@@ -589,11 +595,20 @@ def parse_compound(compound, network):
                     "' appears to not be available in the network.\n")
                     node = None
         except KeyError:
-            s_err("Error: KEGG ID '" + compound + \
-            "' appears to not be available in the network.\n")
+            try:
+                node = network.graph['cmid2node'][compound]
+                if return_set:
+                    return {node}
+            except KeyError:
+                if return_set:
+                    return set()
+                s_err("Error: KEGG ID '" + compound + \
+                "' appears to not be available in the network.\n")
     else:
         try:
             nodes = network.graph['name2nodes'][compound]
+            if return_set:
+                return set(nodes)
             if len(nodes) > 1:
                 nodes = "'\n'".join(
                     sorted([network.node[n]['mid'] for n in nodes])
@@ -608,6 +623,8 @@ def parse_compound(compound, network):
                     "' appears to not be available in the network.\n")
                     node = None
         except KeyError:
+            if return_set:
+                return set()
             s_err("Error: Name '" + compound + \
             "' appears to not be available in the network.\n")
 
@@ -938,11 +955,55 @@ def format_pathway_html(pw_df, network, target_node, depth, rxn_lim, n_pw=200):
     return "\n".join(html)
 
 
+def disconnect_reactants_products(
+        network, reactants = set(), products = set()
+    ):
+    """Disallow reactions based on involved metabolites
+
+    Delete reactant and product nodes to disallow reactions using or
+    producing certain compounds
+    """
+
+    # Identify compound nodes of reactants and products that are to
+    # be disconnected
+    reactant_cpd_nodes = set()
+    for reactant in reactants:
+        n_nodes_before = len(reactant_cpd_nodes)
+        reactant_cpd_nodes = reactant_cpd_nodes.union(
+            parse_compound(reactant, network, return_set=True)
+        )
+        if n_nodes_before == len(reactant_cpd_nodes):
+            s_err("Warning: Reactant %s could not be banned. Check name or use its ID." % reactant)
+
+    product_cpd_nodes = set()
+    for product in products:
+        n_nodes_before = len(product_cpd_nodes)
+        product_cpd_nodes = product_cpd_nodes.union(
+            parse_compound(product, network, return_set=True)
+        )
+        if n_nodes_before == len(product_cpd_nodes):
+            s_err("Warning: Product %s could not be banned. Check name or use its ID." % product)
+
+    # Identify the reaction nodes to disconnect
+    nodes_to_disconnect = set()
+    for node in network.nodes():
+        if network.node[node]['type'] in {'rf', 'rr'}:
+            if network.node[node]['c'].intersection(reactant_cpd_nodes):
+                nodes_to_disconnect.add(node)
+    for node in network.nodes():
+        if network.node[node]['type'] in {'pf', 'pr'}:
+            if network.node[node]['c'].intersection(product_cpd_nodes):
+                nodes_to_disconnect.add(node)
+
+    # Disconnect (actually delete) nodes
+    network.remove_nodes_from(nodes_to_disconnect)
+
+
 # Main code block
-def main(infile_name, compound, start_comp_id_file, exact_comp_id,
-    rxn_lim, depth, n_procs, sub_network_out, pathway_pickle, shallow,
-    pathway_text, pathway_html, n_pw_out, bounds, ratios, dfG_json, net_file,
-    pH, T, R):
+def main(infile_name, compound, ban_reac_file, ban_prod_file,
+    start_comp_id_file, exact_comp_id, rxn_lim, depth, n_procs, sub_network_out,
+    pathway_pickle, shallow, pathway_text, pathway_html, n_pw_out, bounds,
+    ratios, dfG_json, net_file, pH, T, R):
 
     # Default results are empty
     results = {}
@@ -951,6 +1012,18 @@ def main(infile_name, compound, start_comp_id_file, exact_comp_id,
     s_out("\nLoading network pickle...")
     network = pickle.load(open(infile_name, 'rb'))
     s_out(" Done.\n")
+
+    # Disconnect (delete) nodes that are to be banned
+    if ban_reac_file:
+        BR = set([L.rstrip() for L in open(ban_reac_file, 'r').readlines()])
+    else:
+        BR = set()
+    if ban_prod_file:
+        BP = set([L.rstrip() for L in open(ban_prod_file, 'r').readlines()])
+    else:
+        BP = set()
+    if BR or BP:
+        disconnect_reactants_products(network, BR, BP)
 
     # Update starting compounds
     if start_comp_id_file:
@@ -1140,6 +1213,14 @@ if __name__ == "__main__":
 
     # Pathway enumeration parameters
     parser.add_argument(
+        '--banned_reactants', type=str,
+        help='Specify banned reactant compounds in a file.'
+    )
+    parser.add_argument(
+        '--banned_products', type=str,
+        help='Specify banned product compounds in a file.'
+    )
+    parser.add_argument(
         '-S', '--start_comp_ids', type=str,
         help='Provide new starting compounds in a file.'
     )
@@ -1216,9 +1297,9 @@ if __name__ == "__main__":
 
     # Run main function
     main(
-        args.infile, args.compound, args.start_comp_ids, args.exact_comp_id,
-        args.reactions, args.depth, args.processes, args.sub_network,
-        args.pathway_pickle, args.shallow, args.pathway_text, args.pathway_html,
-        args.n_html_pathways, args.bounds, args.ratios, args.gibbs, args.model,
-        args.pH, args.T, args.R
+        args.infile, args.compound, args.banned_reactants, args.banned_products,
+        args.start_comp_ids, args.exact_comp_id, args.reactions, args.depth,
+        args.processes, args.sub_network, args.pathway_pickle, args.shallow,
+        args.pathway_text, args.pathway_html, args.n_html_pathways, args.bounds,
+        args.ratios, args.gibbs, args.model, args.pH, args.T, args.R
     )

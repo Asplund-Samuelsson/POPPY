@@ -752,6 +752,10 @@ def test_parse_compound(capsys):
 
     assert err == exp_err
 
+    # Test the return of sets
+    assert parse_compound('Twin', G, return_set=True) == {5,8}
+    assert parse_compound('C99999', G, return_set=True) == {14}
+
 
 def test_update_start_compounds():
     G = nx.DiGraph()
@@ -1196,3 +1200,94 @@ def test_format_pathway_html():
         print(line[1])
         print(exp_html[line[0]])
         assert line[1] == exp_html[line[0]]
+
+
+def test_disconnect_reactants_products():
+
+    # Set up testing network
+    N = nx.DiGraph()
+    N.add_nodes_from([1,7], type='c', start=True)
+    N.add_nodes_from([2,3,4,5,6], type='c', start=False)
+    N.add_nodes_from([101,301,501], type='rf')
+    N.add_nodes_from([102,302,502], type='pf')
+    N.add_nodes_from([103,303,503], type='rr')
+    N.add_nodes_from([104,304,504], type='pr')
+    N.add_nodes_from([201,401], type='rr')
+    N.add_nodes_from([202,402], type='pr')
+    N.add_nodes_from([203,403], type='rf')
+    N.add_nodes_from([204,404], type='pf')
+    N.add_path([1,101,102,2,201,202,5,401,402,6])
+    N.add_path([6,403,404,5,203,204,2,103,104,1])
+    N.add_path([1,101,102,3,301,302,4,401,402,6])
+    N.add_path([6,403,404,4,303,304,3,103,104,1])
+    N.add_path([7,501,502,4,503,504,7])
+    for node in N.nodes():
+        if N.node[node]['type'] in {'rf','rr'}:
+            N.node[node]['c'] = set(N.predecessors(node))
+        if N.node[node]['type'] in {'pf','pr'}:
+            N.node[node]['c'] = set(N.successors(node))
+
+    # Add dictionaries
+    N.graph['cmid2node'] = {
+    'Cf647c96ae2e66c3b6ab160faa1d8498be5112fe4':1,
+    'C31890':2,
+    'C00291':3,
+    'C6a6f4d5234ea2b14b42c391eb760d6311afa8388':4,
+    'C67559':5,
+    'C67560':6,
+    'C99999':7
+    }
+
+    N.graph['kegg2nodes'] = {
+    'C31890':set([2]), 'C00291':set([3]), 'C67559':set([5]),
+    'C67560':set([6]), 'C99999':set([7])
+    }
+
+    N.graph['name2nodes'] = {
+    'Alpha':set([1]),
+    'Beta':set([2]),
+    'Gamma':set([3]),
+    'Twin':set([4,5]),
+    'n-Alpha':set([6]),
+    'n-Beta':set([7])
+    }
+
+    # Select compounds and reaction nodes to ban
+    ban_reacs = {'Alpha','C31890'}
+    ban_prods = {'Twin','Cf647c96ae2e66c3b6ab160faa1d8498be5112fe4','C99999'}
+
+    ban_reacs_n = set()
+    for node in N.nodes():
+        if N.node[node]['type'] in {'rr', 'rf'}:
+            if N.node[node]['c'].intersection({1, 2}):
+                ban_reacs_n.add(node)
+
+    ban_prods_n = set()
+    for node in N.nodes():
+        if N.node[node]['type'] in {'pr', 'pf'}:
+            if N.node[node]['c'].intersection({4, 5, 1, 7}):
+                ban_prods_n.add(node)
+
+    assert ban_reacs_n == {201, 101, 103}
+    assert ban_prods_n == {104, 202, 302, 404, 502, 504}
+
+    # Make copy of network and ban in three different ways
+    G = N.copy()
+    disconnect_reactants_products(G, reactants=ban_reacs)
+    assert not nx.is_isomorphic(G, N)
+    assert set(N.nodes()) - ban_reacs_n == set(G.nodes())
+
+    G = N.copy()
+    disconnect_reactants_products(G, products=ban_prods)
+    assert not nx.is_isomorphic(G, N)
+    assert set(N.nodes()) - ban_prods_n == set(G.nodes())
+
+    G = N.copy()
+    disconnect_reactants_products(G, ban_reacs, ban_prods)
+    assert not nx.is_isomorphic(G, N)
+    assert set(N.nodes()) - ban_reacs_n - ban_prods_n == set(G.nodes())
+
+    # Make sure that supplying empty sets does not affect the network
+    G = N.copy()
+    disconnect_reactants_products(G, set(), set())
+    assert nx.is_isomorphic(G, N)
