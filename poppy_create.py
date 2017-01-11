@@ -61,7 +61,9 @@ def allow_reaction_listing(kegg_comp, kegg_rxn):
         "C00342" : ("C00342", "C00343"), # Thioredoxin/Thiredoxin disulfide
         "C00343" : ("C00342", "C00343"), # Thioredoxin/Thiredoxin disulfide
         "C00399" : ("C00399", "C00390"), # Ubiquinone/Ubiquinol
-        "C00390" : ("C00399", "C00390")  # Ubiquinone/Ubiquinol
+        "C00390" : ("C00399", "C00390"), # Ubiquinone/Ubiquinol
+        "C00138" : ("C00138", "C00139"), # Ferredoxin (red/ox)
+        "C00139" : ("C00138", "C00139")  # Ferredoxin (red/ox)
     }
     try:
         C = cofactor_pairs[kegg_comp['_id']]

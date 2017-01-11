@@ -1175,7 +1175,7 @@ def main(infile_name, compound, ban_reac_file, ban_prod_file,
                     try:
                         f.write(cpd_images[cpd])
                     except KeyError:
-                        s_err("Warning: No image found for '%s'." % cpd)
+                        s_err("Warning: No image found for '%s'.\n" % cpd)
 
             # Add CSS file to HTML directory
             css_loc = os.path.join(repo_dir, 'data/style.css')
