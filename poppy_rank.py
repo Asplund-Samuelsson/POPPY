@@ -142,13 +142,13 @@ def drGs_for_pathway(pathway, dfG_dict):
 
 
 def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
-    T=298.15, R=8.31e-3, network_text=""):
+    T=298.15, R=8.31e-3, network_text="", x_max=0.1, x_min=0.0000001):
     """Create a dictionary with pathways and their MDF values"""
 
     # The cytosol is selected as the default compartment
     # This is where the pathway reactions take place
     # The "_[cyt]" tag will be removed
-    network_text = network_text.replace("_[cyt]", "")
+    #network_text = network_text.replace("_[cyt]", "")
 
     # Create a stoichiometric matrix of the background network
     S_net = mdf.read_reactions(network_text)
@@ -182,7 +182,7 @@ def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
                 A = mdf.mdf_A(S, list(S_net.columns))
 
                 # Construct b vector
-                b = mdf.mdf_b(S, drGs, ne_con)
+                b = mdf.mdf_b(S, drGs, ne_con, x_max, x_min)
 
                 # Filter the ratio constraints to those relevant to S
                 eq_con_f = eq_con[eq_con['cpd_id_num'].isin(S.index)]

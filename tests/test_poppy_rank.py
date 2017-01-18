@@ -215,12 +215,17 @@ def test_pathways_to_mdf():
     ne_con = mdf.read_constraints("C1\t0.0001\t0.001\nZ1\t0.1\t0.1\nZ2\t0.2\t0.2")
     eq_con = mdf.read_ratio_constraints("X1\tX3\t1\nZ1\tZ2\t1")
 
-    assert pathways_to_mdf(pathways, dfG_dict, ne_con, eq_con) == pw_mdf_dict
+    assert pathways_to_mdf(
+        pathways, dfG_dict, ne_con, eq_con, x_max=0.01, x_min=0.000001
+    ) == pw_mdf_dict
 
     # Pathway 1 with a background network
     nt = "R7\tC1 + C6 <=> C9\nR8\tC8 + X3 <=> X1 + C4"
     exp_mdf = 19.967310457
-    mdf_dict = pathways_to_mdf([pathways[0]], dfG_dict, ne_con, eq_con, network_text=nt)
+    mdf_dict = pathways_to_mdf(
+        [pathways[0]], dfG_dict, ne_con, eq_con, network_text=nt,
+        x_max=0.01, x_min=0.000001
+    )
     assert_almost_equal(exp_mdf, mdf_dict[pathways[0]])
 
 

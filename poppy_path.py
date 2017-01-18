@@ -1002,8 +1002,8 @@ def disconnect_reactants_products(
 # Main code block
 def main(infile_name, compound, ban_reac_file, ban_prod_file,
     start_comp_id_file, exact_comp_id, rxn_lim, depth, n_procs, sub_network_out,
-    pathway_pickle, shallow, pathway_text, pathway_html, n_pw_out, bounds,
-    ratios, dfG_json, net_file, pH, T, R):
+    pathway_pickle, shallow, pathway_text, pathway_html, n_pw_out, c_min, c_max,
+    bounds, ratios, dfG_json, net_file, pH, T, R):
 
     # Default results are empty
     results = {}
@@ -1108,7 +1108,8 @@ def main(infile_name, compound, ban_reac_file, ban_prod_file,
 
             # Perform MDF
             mdf_dict = rank.pathways_to_mdf(
-                pw_rank, dfG_dict, ne_con, eq_con, n_procs, T, R, net_text
+                pw_rank, dfG_dict, ne_con, eq_con, n_procs, T, R, net_text,
+                c_max, c_min
             )
 
             # Create output directory structure
@@ -1265,6 +1266,14 @@ if __name__ == "__main__":
 
     # MDF analysis
     parser.add_argument(
+        '--c_min', type=float, default=0.0000001,
+        help='Set the default lower concentration bound.'
+    )
+    parser.add_argument(
+        '--c_max', type=float, default=0.1,
+        help='Set the default upper concentration bound.'
+    )
+    parser.add_argument(
         '--bounds', type=str,
         help='Read metabolite concentration bounds (inequality constraints).'
     )
@@ -1278,7 +1287,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--model', type=str,
-        help='Read reactions corresponding to a reduced network model.'
+        help='Read model reaction network for NE-MDF.'
     )
     parser.add_argument(
         '--pH', type=float, default=7.0,
@@ -1300,6 +1309,7 @@ if __name__ == "__main__":
         args.infile, args.compound, args.banned_reactants, args.banned_products,
         args.start_comp_ids, args.exact_comp_id, args.reactions, args.depth,
         args.processes, args.sub_network, args.pathway_pickle, args.shallow,
-        args.pathway_text, args.pathway_html, args.n_html_pathways, args.bounds,
-        args.ratios, args.gibbs, args.model, args.pH, args.T, args.R
+        args.pathway_text, args.pathway_html, args.n_html_pathways, args.c_min,
+        args.c_max, args.bounds, args.ratios, args.gibbs, args.model, args.pH,
+        args.T, args.R
     )
