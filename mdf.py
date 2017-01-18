@@ -482,8 +482,9 @@ def calc_drGs(S, drGs_std, log_conc, T=298.15, R=8.31e-3):
     return drGs
 
 
-def multi_mdf(S, all_drGs, constraints, ratio_constraints=None,
-              all_directions=False, T=298.15, R=8.31e-3):
+def multi_mdf(S, all_drGs, constraints, ratio_constraints=None, net_rxns=[],
+              all_directions=False, x_max=0.01, x_min=0.000001,
+              T=298.15, R=8.31e-3):
     """Run MDF optimization for all condition combinations
 
     ARGUMENTS
@@ -506,9 +507,16 @@ def multi_mdf(S, all_drGs, constraints, ratio_constraints=None,
         third column is interpreted as the fixed ratio when the fourth column
         contains a None value. The last column indicates the type of spacing to
         use for ratio ranges (linear or logarithmic).
+    net_rxns : list of strings
+        List with strings referring to the background network reactions for
+        network-embedded MDF analysis (NE-MDF). The reactions should be in S.
     all_directions : bool, optional
         Set to True to calculate MDF for all possible reaction direction
         combinations. Not recommended for sets of reactions >20.
+    x_max : float
+        Maximum default metabolite concentration (M).
+    x_min : float
+        Minimum default metabolite concentration (M).
     T : float
         Temperature (K).
     R : float
@@ -641,8 +649,8 @@ def multi_mdf(S, all_drGs, constraints, ratio_constraints=None,
 
         # Set up MDF inputs
         c = mdf_c(S_mod)
-        A = mdf_A(S_mod)
-        b = mdf_b(S_mod, drGs, constraints_mod)
+        A = mdf_A(S_mod, net_rxns)
+        b = mdf_b(S_mod, drGs, constraints_mod, x_max, x_min, T, R)
 
         # Use equality (ratio) constraints if they were specified
         if rats is not None:
@@ -700,7 +708,8 @@ def multi_mdf(S, all_drGs, constraints, ratio_constraints=None,
 
 # Main code block
 def main(reaction_file, std_drG_file, outfile_name, cons_file, ratio_cons_file,
-         all_directions, T=298.15, R=8.31e-3, proton_name='C00080'):
+         pw_rxn_file, all_directions, T=298.15, R=8.31e-3, proton_name='C00080',
+         x_max_default=0.01, x_min_default=0.000001):
 
     # Load stoichiometric matrix
     sWrite("\nLoading stoichiometric matrix...")
@@ -734,10 +743,20 @@ def main(reaction_file, std_drG_file, outfile_name, cons_file, ratio_cons_file,
         sWrite(" Done.\n")
     else:
         ratio_constraints = None
+    if pw_rxn_file:
+        sWrite("Reading pathway reactions for NE-MDF...")
+        pw_rxns = list(filter(None,
+                       [x.strip() for x in open(pw_rxn_file, 'r').readlines()]))
+        # Create list of network reactions rather than pathway reactions
+        # for NE-MDF
+        net_rxns = list(set(S.columns) - set(pw_rxns))
+        sWrite(" Done.\n")
+    else:
+        net_rxns = []
 
     sWrite("Performing MDF optimization...")
-    mdf_table = multi_mdf(S, std_drGs, constraints, ratio_constraints,
-                          all_directions, T, R)
+    mdf_table = multi_mdf(S, std_drGs, constraints, ratio_constraints, net_rxns,
+                          all_directions, x_max_default, x_min_default, T, R)
     sWrite("\n")
 
     # Write MDF results to outfile
@@ -769,6 +788,10 @@ if __name__ == "__main__":
         help='Load concentration ratio constraints.'
         )
     parser.add_argument(
+        '--pathway', type=str,
+        help='Specify pathway reactions for NE-MDF.'
+        )
+    parser.add_argument(
         '--all_directions', action='store_true',
         help='Analyze MDF for all reaction directions.'
         )
@@ -784,8 +807,17 @@ if __name__ == "__main__":
         '-H', '--proton_name', default='C00080',
         help='Name used to identify protons.'
         )
+    parser.add_argument(
+        '--min_conc', type=float, default=0.000001,
+        help='Default minimum concentration (M).'
+        )
+    parser.add_argument(
+        '--max_conc', type=float, default=0.01,
+        help='Default maximum concentration (M).'
+        )
     args = parser.parse_args()
     main(
         args.reactions, args.std_drG, args.outfile, args.constraints,
-        args.ratios, args.all_directions, args.T, args.R, args.proton_name
+        args.ratios, args.pathway, args.all_directions, args.T, args.R,
+        args.proton_name, args.max_conc, args.min_conc
     )
