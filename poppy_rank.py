@@ -394,7 +394,33 @@ if __name__ == "__main__":
         'outfile', type=str, default=False,
         help='Save modified pathways text file with MDF values.'
     )
+    parser.add_argument(
+        '--write_gibbs', action='store_true',
+        help='Calculate and write drGs to outfile (first pathway only).'
+    )
     args = parser.parse_args()
+
+    # Option to calculate and write a drG text file for the first pathway
+    if args.write_gibbs:
+
+        # Load pathways
+        pathways = read_pathways_text(open(args.pathways, 'r').read())
+
+        # Load standard formation Gibbs energy dictionary
+        dfGs = load_dfG_dict(pathways, args.pH, args.gibbs)
+
+        # Calculate reaction delta Gs
+        drGs_d = drGs_for_pathway(pathways[0], dfGs)
+        drGs_t = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_d.items()])
+
+        # Write to outfile
+        outfile = open(args.outfile, 'w')
+        outfile.write(drGs_t + "\n")
+        outfile.close()
+
+        # Exit program
+        sys.exit()
+
     main(args.pathways, args.outfile, args.gibbs,
          args.pH, args.constraints, args.ratios,
          args.processes, args.T, args.R)
