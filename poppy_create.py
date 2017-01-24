@@ -1697,8 +1697,8 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
 
     # Download the MINE reactions listed for the MINE compounds
     s_out("Downloading MINE reactions...\n")
-    #MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
-    MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
+    MINE_rxns = list(filter(None, threaded_getrxn(con, db, list(MINE_rxn_ids))))
+    #MINE_rxns = pickle.load(open('/ssd/common/db/mine/MINE_rxns.pickle', 'rb'))
 
     # Download the 'X' MINE compounds listed for the reactions
     s_out("\nIdentifying cofactors...")
@@ -2010,9 +2010,9 @@ def main(outfile_name, infile, mine, kegg, step_limit,
     kegg_comp_dict = {} # Default
     kegg_rxn_dict = {} # Default
     if kegg:
-        kegg_file = '/ssd/common/db/kegg/KEGG_cpd_rxn.pickle'
-        kegg_comp_dict, kegg_rxn_dict = pickle.load(open(kegg_file, 'rb'))
-        #kegg_comp_dict, kegg_rxn_dict = get_raw_KEGG()
+        #kegg_file = '/ssd/common/db/kegg/KEGG_cpd_rxn.pickle'
+        #kegg_comp_dict, kegg_rxn_dict = pickle.load(open(kegg_file, 'rb'))
+        kegg_comp_dict, kegg_rxn_dict = get_raw_KEGG()
 
     # Acquire raw MINE dictionaries
     start_ids = [] # Default
