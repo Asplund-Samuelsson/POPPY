@@ -505,10 +505,7 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10, shallow=False):
 
         # Discard the pathway if it contains cycles
         # Cycles are 1) wasteful and 2) indicate bootstrap compounds
-        # Termini are generated to allow cycles with start compounds
-        cyctest_pathnet = pathnet.copy()
-        generate_termini(cyctest_pathnet)
-        if not nx.is_directed_acyclic_graph(cyctest_pathnet):
+        if not nx.is_directed_acyclic_graph(pathnet):
             continue
 
         # Check the number of reactions
