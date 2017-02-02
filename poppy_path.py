@@ -386,7 +386,6 @@ def has_cycles(pathnet, network):
     pathnodes = pathnodes.union(nodes_being_produced(pathnet))
     pathnodes = pathnodes.union(nodes_being_consumed(pathnet))
     pathnet_x = network.subgraph(pathnodes)
-    print("pathnodes" + str(pathnodes))
 
     # Connect disconnected nodes
     # ...by iterating over nodes
