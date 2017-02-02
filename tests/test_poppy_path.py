@@ -395,6 +395,57 @@ def test_subnetwork_from_paths():
     ])
 
 
+def test_has_cycles():
+    # Set up testing network
+    Z = nx.DiGraph()
+
+    # Add Compounds
+    Z.add_nodes_from([1,2,7], type='c', start=True)
+    Z.add_nodes_from([3,4,5,6], type='c', start=False)
+
+    # Add reactions
+    rf = [101,201,301,401]
+    Z.add_nodes_from(rf, type='rf')
+    Z.add_nodes_from([x+1 for x in rf], type='pf')
+    Z.node[201]['type'] = 'rr' # Don't forget reverse reactions
+    Z.node[202]['type'] = 'pr'
+
+    # Add reactant sets
+    Z.node[101]['c'] = set([1])
+    Z.node[201]['c'] = set([2,6])
+    Z.node[301]['c'] = set([3,4])
+    Z.node[401]['c'] = set([7])
+
+    # Add product sets
+    Z.node[102]['c'] = set([3])
+    Z.node[202]['c'] = set([4])
+    Z.node[302]['c'] = set([5,6])
+    Z.node[402]['c'] = set([2])
+
+    # Add paths
+    Z.add_path([1,101,102,3,301,302,1])
+    Z.add_path([7,401,402,2,201,202,4,301])
+    Z.add_edge(302,5)
+    Z.add_path([302,6,201])
+
+    # Current cycles are...
+    # 1>101>102>3>301>302>1 (okay, 1 is start)
+    # 6>201>202>4>301>302>6 (not okay, 6 is a bootstrap compound)
+
+    Z_path_1 = Z.subgraph({1,2,101,102,201,202,3,4,301,302,5,6})
+    assert has_cycles(Z_path_1, Z)
+
+    Z_path_2 = Z.subgraph({1,2,101,102,201,202,3,4,301,302,5,6})
+    Z_path_2.remove_edges_from([(302,6),(6,201)])
+    assert has_cycles(Z_path_2, Z)
+
+    Z_path_3 = Z.subgraph({7,401,402,2,201,202,4,301,302,5})
+    assert has_cycles(Z_path_3, Z)
+
+    Z_path_4 = Z.subgraph({1,101,102,3,301,302,5})
+    assert not has_cycles(Z_path_4, Z)
+
+
 def test_paths_to_pathways():
     # Set up testing network - Same as for Identifyfind_branch_nodes
     G = nx.DiGraph()

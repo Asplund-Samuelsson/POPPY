@@ -281,10 +281,10 @@ def generate_termini(network):
     Generates termini and eliminates start-compound induced branching by
     cutting all start compound to reactant node edges.
     """
-    for node in network.nodes():
-        if network.node[node]['type'] == 'c':
-            if network.node[node]['start']:
-                network.remove_edges_from(network.out_edges(node))
+    for n in network.nodes():
+        if network.node[n]['type'] == 'c':
+            if network.node[n]['start']:
+                network.remove_edges_from(network.out_edges(n))
 
 
 def digraph_connected_component(network, target_node):
@@ -377,6 +377,37 @@ def format_graphml(network, subnet):
         del outnet.graph[key]
 
     return outnet
+
+
+def has_cycles(pathnet, network):
+
+    # Expand the pathway network with all consumed and generated nodes
+    pathnodes = set(pathnet.nodes())
+    pathnodes = pathnodes.union(nodes_being_produced(pathnet))
+    pathnodes = pathnodes.union(nodes_being_consumed(pathnet))
+    pathnet_x = network.subgraph(pathnodes)
+    print("pathnodes" + str(pathnodes))
+
+    # Connect disconnected nodes
+    # ...by iterating over nodes
+    for n in pathnet_x.nodes():
+        node = pathnet_x.node[n]
+        # Connecting all reactants to reactant nodes
+        if node['type'] in {'rf', 'rr'}:
+            for r in node['c']:
+                if not pathnet_x.has_edge(r, n):
+                    pathnet_x.add_edge(r, n)
+        # Connecting all products to product nodes
+        if node['type'] in {'pf', 'pr'}:
+            for p in node['c']:
+                if not pathnet_x.has_edge(n, p):
+                    pathnet_x.add_edge(n, p)
+
+    # Generate termini
+    generate_termini(pathnet_x)
+
+    # Determine cyclicity
+    return not nx.is_directed_acyclic_graph(pathnet_x)
 
 
 def paths_to_pathways(network, paths, target_node, rxn_lim=10, shallow=False):
@@ -505,8 +536,11 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10, shallow=False):
 
         # Discard the pathway if it contains cycles
         # Cycles are 1) wasteful and 2) indicate bootstrap compounds
-        if not nx.is_directed_acyclic_graph(pathnet):
+        if has_cycles(pathnet, network):
             continue
+        #if not nx.is_directed_acyclic_graph(pathnet):
+        #    continue
+
 
         # Check the number of reactions
         n_rxn = count_reactions(pathnet)
