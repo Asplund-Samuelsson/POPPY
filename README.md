@@ -18,8 +18,12 @@ limitations using the MDF (Max-min Driving Force) approach.
 transformed Gibbs standard formation energy values for a range of pHs and stores
 them in a json file for use in the MDF analysis.
 
+**mdf.py** performs Max-min Driving Force (MDF; [Noor _et al._, 2014](http://doi.org/10.1371/journal.pcbi.1003483)) and network-embedded
+MDF (NE-MDF) analysis.
+
 #### Dependencies
 - Python ≥ 3.5.1
+- Python SciPy and NumPy: https://www.scipy.org/
 - Python NetworkX: https://github.com/networkx/networkx
 - Python RDKit: https://github.com/rdkit/rdkit
 - Python MINE-API: https://github.com/JamesJeffryes/MINE-API (included as **mineclient3.py**)
