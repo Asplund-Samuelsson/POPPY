@@ -1903,14 +1903,16 @@ def test_merge_MINE_KEGG_rxns():
 
 
 def test_formula_to_dict():
-    assert formula_to_dict("H5C3O2") == {'C':3,'O':2}
-    assert formula_to_dict("H12C6O5Cl") == {'C':6,'O':5,'Cl':1}
-    assert formula_to_dict("HCO3", H=True) == {'H':1,'C':1,'O':3}
+    assert formula_to_dict("H5C3O2") == {'C':3.0,'O':2.0}
+    assert formula_to_dict("H12C6O5Cl") == {'C':6.0,'O':5.0,'Cl':1.0}
+    assert formula_to_dict("HCO3", H=True) == {'H':1.0,'C':1.0,'O':3.0}
     assert formula_to_dict("C25H42N7O17P3S", H=True) == {
-        'C':25, 'H':42, 'N':7, 'O':17, 'P':3, 'S':1
+        'C':25.0, 'H':42.0, 'N':7.0, 'O':17.0, 'P':3.0, 'S':1.0
     }
-    assert formula_to_dict("ClCSH") == {'Cl':1,'C':1,'S':1}
-    assert formula_to_dict("C14H18O4(C5H8)n", H=True) == {'C':19, 'H':26, 'O':4}
+    assert formula_to_dict("ClCSH") == {'Cl':1.0,'C':1.0,'S':1.0}
+    assert formula_to_dict("C14H18O4(C5H8)n", H=True) == {
+        'C':19.0, 'H':26.0, 'O':4.0
+    }
 
 
 def test_is_balanced():
@@ -1927,7 +1929,7 @@ def test_is_balanced():
         ])
 
     # Get the compounds from KEGG
-    comp_ids = set()
+    comp_ids = set(['C00002', 'C03736', 'C02739', 'C01328'])
     for rxn in balanced_rxns + unbalanced_rxns:
         comp_ids = comp_ids.union(extract_reaction_comp_ids(rxn))
     comp_dict = dict([(c['_id'], c) for c in get_KEGG_comps(comp_ids)])
@@ -1937,3 +1939,30 @@ def test_is_balanced():
         assert is_balanced(rxn, comp_dict)
     for rxn in unbalanced_rxns:
         assert not is_balanced(rxn, comp_dict)
+
+    # Check output for reactions with float coefficients
+    rxn_1 = {'_id': 'RM7', 'Operators': ['M:3.2.2a'],
+             'Products': [[1.0, 'C00002'], [1.0, 'C03736']],
+             'Reactants': [[1.0, 'C02739'], [1.0, 'C00001']],
+             'MINE_id': ['R2d41']}
+    rxn_2 = {'_id': 'RM7', 'Operators': ['M:3.2.2a'],
+             'Products': [[1.5, 'C00002'], [1.5, 'C03736']],
+             'Reactants': [[1.5, 'C02739'], [1.5, 'C00001']],
+             'MINE_id': ['R2d41']}
+    rxn_3 = {'_id': 'RM7', 'Operators': ['M:3.2.2a'],
+             'Products': [[1, 'C00002'], [1, 'C03736']],
+             'Reactants': [[1, 'C02739'], [1, 'C00001']],
+             'MINE_id': ['R2d41']}
+    rxn_4 = {'_id': 'RM7', 'Operators': ['M:3.2.2a'],
+             'Products': [[1.5, 'C00002'], [1, 'C03736']],
+             'Reactants': [[1, 'C02739'], [5, 'C00001']],
+             'MINE_id': ['R2d41']}
+    rxn_5 = {'_id': 'RM7', 'Operators': ['M:3.2.2a'],
+             'Products': [[1.0, 'C00002'], [1.0, 'C03736']],
+             'Reactants': [[1.0, 'C02739'], [1.0, 'C01328']],
+             'MINE_id': ['R2d41']}
+    assert  is_balanced(rxn_1, comp_dict)
+    assert  is_balanced(rxn_2, comp_dict)
+    assert  is_balanced(rxn_3, comp_dict)
+    assert  not is_balanced(rxn_4, comp_dict)
+    assert  not is_balanced(rxn_5, comp_dict)

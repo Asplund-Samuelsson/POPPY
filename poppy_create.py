@@ -15,7 +15,6 @@ from requests import get as rget
 from rdkit import Chem
 from copy import deepcopy
 from itertools import repeat, product, combinations
-from collections import Counter
 
 # Import scripts
 import mineclient3 as mc
@@ -1956,9 +1955,9 @@ def formula_to_dict(formula, H=False):
             count = 1
         if atom != 'H' or H:
             try:
-                formula_dict[atom] += int(count)
+                formula_dict[atom] += float(count)
             except KeyError:
-                formula_dict[atom] = int(count)
+                formula_dict[atom] = float(count)
 
     return formula_dict
 
@@ -1967,20 +1966,21 @@ def is_balanced(reaction, comp_dict):
     """Determines whether the reaction is balanced"""
     def increment_elements(elements, n, comp_id):
         try:
-            formula = Counter(
-                formula_to_dict(comp_dict[comp_id]['Formula'], H=True)
-            )
-            for i in range(n):
-                elements = elements + formula
+            formula = formula_to_dict(comp_dict[comp_id]['Formula'], H=True)
+            for element in formula:
+                try:
+                    elements[element] += float(n) * formula[element]
+                except KeyError:
+                    elements[element] = float(n) * formula[element]
         except KeyError:
             pass
         return elements
 
-    reactant_elements = Counter()
+    reactant_elements = {}
     for n, reactant in reaction['Reactants']:
         reactant_elements = increment_elements(reactant_elements, n, reactant)
 
-    product_elements = Counter()
+    product_elements = {}
     for n, product in reaction['Products']:
         product_elements = increment_elements(product_elements, n, product)
 
