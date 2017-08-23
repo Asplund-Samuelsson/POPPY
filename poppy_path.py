@@ -666,7 +666,9 @@ def parse_compound(compound, network, return_set=False):
 
 def update_start_compounds(network, start_comp_ids):
     """Update the start compound status for each compound node."""
-    S = set(start_comp_ids)
+    S = [parse_compound(i, network, return_set = True) for i in start_comp_ids]
+    S = [a for b in S for a in b]
+    S = set([network.node[n]['mid'] for n in S])
     for n in network.nodes():
         if network.node[n]['type'] == 'c':
             if network.node[n]['mid'] in S:

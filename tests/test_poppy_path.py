@@ -811,10 +811,39 @@ def test_parse_compound(capsys):
 def test_update_start_compounds():
     G = nx.DiGraph()
 
-    G.add_node(1,type='c',mid='C1',start=True) # Will be changed
-    G.add_node(2,type='c',mid='C2',start=False) # Will be changed
-    G.add_node(3,type='c',mid='C3',start=True) # Will not be changed
-    G.add_node(4,type='c',mid='C4',start=False) # Will not be changed
+    G.graph['cmid2node'] = {}
+    G.graph['kegg2nodes'] = {}
+    G.graph['name2nodes'] = {}
+
+    G.graph['cmid2node'] = {
+    'C1ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':1,
+    'C2ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':2,
+    'C3ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':3,
+    'C4ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':4,
+    }
+
+    G.graph['kegg2nodes'] = {
+    'C31890':set([1]), 'C00291':set([2]), 'C67559':set([3]),'C67560':set([3])
+    }
+
+    G.graph['name2nodes'] = {
+    'Alpha':set([1]),
+    'Beta':set([2]),
+    'Gamma':set([3]),
+    'n-Alpha':set([1]),
+    'n-Beta':set([2]),
+    'n-Gamma':set([3]),
+    'Twin':set([1,4])
+    }
+
+    G.add_node(1,type='c',\
+    mid='C1ae5f6786e5a8f65a865e865f68a5e68f5a86e8a',start=True)
+    G.add_node(2,type='c',\
+    mid='C2ae5f6786e5a8f65a865e865f68a5e68f5a86e8a',start=False)
+    G.add_node(3,type='c',\
+    mid='C3ae5f6786e5a8f65a865e865f68a5e68f5a86e8a',start=True)
+    G.add_node(4,type='c',\
+    mid='C4ae5f6786e5a8f65a865e865f68a5e68f5a86e8a',start=False)
     G.add_node(5,type='rf',mid='R1')
     G.add_node(6,type='pf',mid='R1')
     G.add_node(7,type='rr',mid='R1')
@@ -826,9 +855,32 @@ def test_update_start_compounds():
     H.node[1]['start'] = False
     H.node[2]['start'] = True
 
-    start_comp_ids = ['C2','C3']
+    start_comp_ids = [
+    'C2ae5f6786e5a8f65a865e865f68a5e68f5a86e8a',
+    'C3ae5f6786e5a8f65a865e865f68a5e68f5a86e8a'
+    ]
 
     update_start_compounds(G, start_comp_ids)
+
+    assert G.nodes(data=True) == H.nodes(data=True)
+    assert nx.is_isomorphic(G, H)
+
+    H.node[1]['start'] = True
+    H.node[2]['start'] = True
+    H.node[3]['start'] = False
+
+    update_start_compounds(G, ['Alpha', 'Beta', 'n-Beta'])
+
+    assert G.nodes(data=True) == H.nodes(data=True)
+    assert nx.is_isomorphic(G, H)
+
+    H.node[1]['start'] = True
+    H.node[2]['start'] = True
+    H.node[3]['start'] = True
+    H.node[4]['start'] = True
+
+    update_start_compounds(G, \
+    ['C67559', 'C67560', 'C2ae5f6786e5a8f65a865e865f68a5e68f5a86e8a', 'Twin'])
 
     assert G.nodes(data=True) == H.nodes(data=True)
     assert nx.is_isomorphic(G, H)
