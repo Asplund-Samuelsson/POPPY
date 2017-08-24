@@ -918,15 +918,26 @@ def test_construct_network(capsys):
 
 def test_is_connected_MINE_comp():
     G = nx.DiGraph()
-    G.graph['mine_data'] = {
-        'C1':{'Reactant_in':[]},
-        'X2':{},
-        'C3':{'Reactant_in':[],'Product_of':[]},
-        'C4':{'Product_of':[]},
-        'C5':{}
-    }
-    res = [is_connected_MINE_comp(mid,G) for mid in ['C1','X2','C3','C4','C5']]
-    assert res == [True,False,True,True,False]
+
+    G.graph['cmid2node'] = {'C1':1, 'X2':2, 'C3':3, 'C4':4, 'C5':5}
+
+    G.add_node(1,mid='C1')
+    G.add_node(2,mid='X2')
+    G.add_node(3,mid='C3')
+    G.add_node(4,mid='C4')
+    G.add_node(5,mid='C5')
+
+    G.add_node(11,mid='R1',type="pf",c={1,3,4})
+    G.add_node(12,mid='R2',type="rf",c={1,2,3,5})
+
+    G.add_path([11,1,12])
+    G.add_path([11,3,12])
+    G.add_path([11,4])
+    G.add_path([5,12])
+
+    res = [is_connected_MINE_comp(mid, G) for mid in \
+    ['C1','X2','C3','C4','C5','C6']]
+    assert res == [True,False,True,True,True,False]
 
 
 def test_KEGG_MINE_integration():

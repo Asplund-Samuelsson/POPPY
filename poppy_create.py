@@ -980,8 +980,12 @@ def construct_network(comp_dict, rxn_dict, start_comp_ids=[], extra_kegg_ids=[])
 
 def is_connected_MINE_comp(comp_id, network):
     """Determines if the MINE compound is connected."""
-    con_keys = set(['Reactant_in','Product_of'])
-    if con_keys.intersection(network.graph['mine_data'][comp_id].keys()):
+    try:
+        pred = network.successors(network.graph['cmid2node'][comp_id])
+        succ = network.predecessors(network.graph['cmid2node'][comp_id])
+    except KeyError:
+        return False
+    if len(pred) + len(succ) > 0:
         return True
     else:
         return False
