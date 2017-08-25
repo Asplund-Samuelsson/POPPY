@@ -666,16 +666,34 @@ def parse_compound(compound, network, return_set=False):
 
 def update_start_compounds(network, start_comp_ids):
     """Update the start compound status for each compound node."""
-    S = [parse_compound(i, network, return_set = True) for i in start_comp_ids]
-    S = [a for b in S for a in b]
-    S = set([network.node[n]['mid'] for n in S])
+    # Iterate over all nodes
     for n in network.nodes():
+        # Only modify compound nodes
         if network.node[n]['type'] == 'c':
-            if network.node[n]['mid'] in S:
-                start = True
-            else:
-                start = False
-            network.node[n]['start'] = start
+            # 1) Check if the ID is in start_comp_ids
+            if network.node[n]['mid'] in start_comp_ids:
+                network.node[n]['start'] = True
+                continue
+            # 2) Check if a KEGG ID is in start_comp_ids
+            try:
+                kegg_ids = set(network.graph['mine_data'][network.node[n]\
+                ['mid']]['DB_links']['KEGG'])
+                if kegg_ids.intersection(start_comp_ids):
+                    network.node[n]['start'] = True
+                    continue
+            except KeyError:
+                pass
+            # 3) Check if a name is in start_comp_ids
+            try:
+                names = set(network.graph['mine_data'][network.node[n]\
+                ['mid']]['Names'])
+                if names.intersection(start_comp_ids):
+                    network.node[n]['start'] = True
+                    continue
+            except KeyError:
+                pass
+            # 4) If ID, KEGG ID or Name is not in start_comp_ids, set False
+            network.node[n]['start'] = False
 
 
 def format_reaction_text(reaction, reverse=False):
@@ -1064,6 +1082,13 @@ def main(infile_name, compound, ban_reac_file, ban_prod_file,
     if start_comp_id_file:
         S = [L.rstrip() for L in open(start_comp_id_file, 'r').readlines()]
         update_start_compounds(network, S)
+
+    # for n in network.nodes():
+    #     if network.node[n]['type'] != 'c':
+    #         continue
+    #     if network.node[n]['start']:
+    #         print(network.node[n]['mid'], network.graph['mine_data']\
+    #         [network.node[n]['mid']]['Names'][0])
 
     # Pathway enumeration
     if not exact_comp_id:

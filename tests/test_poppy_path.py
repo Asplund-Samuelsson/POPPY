@@ -820,10 +820,14 @@ def test_update_start_compounds():
     'C2ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':2,
     'C3ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':3,
     'C4ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':4,
+    'C00004':11,
+    'Cf5dc8599a48d0111a3a5f618296752e1b53c8d30':12,
+    'Xf5dc8599a48d0111a3a5f618296752e1b53c8d30':13
     }
 
     G.graph['kegg2nodes'] = {
-    'C31890':set([1]), 'C00291':set([2]), 'C67559':set([3]),'C67560':set([3])
+    'C31890':set([1]), 'C00291':set([2]), 'C67559':set([3]),'C67560':set([3]),
+    'C00004':set([11]), 'C30184':set([12])
     }
 
     G.graph['name2nodes'] = {
@@ -833,7 +837,39 @@ def test_update_start_compounds():
     'n-Alpha':set([1]),
     'n-Beta':set([2]),
     'n-Gamma':set([3]),
-    'Twin':set([1,4])
+    'Twin':set([1,4]),
+    'NAD':set([11]),
+    'NADX':set([12])
+    }
+
+    G.graph['mine_data'] = {
+    'C1ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':{
+    'Names':['Alpha','n-Alpha','Twin'],
+    'DB_links':{'KEGG':['C31890']},
+    },
+    'C2ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':{
+    'Names':['Beta','n-Beta'],
+    'DB_links':{'KEGG':['C00291']},
+    },
+    'C3ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':{
+    'Names':['Gamma','n-Gamma'],
+    'DB_links':{'KEGG':['C67559','C67560']},
+    },
+    'C4ae5f6786e5a8f65a865e865f68a5e68f5a86e8a':{
+    'Names':['Twin'],
+    },
+    'C00004':{
+    'Names':['NAD','NADX','DPN'],
+    'DB_links':{'KEGG':['C00004','C30184']},
+    },
+    'Cf5dc8599a48d0111a3a5f618296752e1b53c8d30':{
+    'Names':['NAD','NADX','DPN'],
+    'DB_links':{'KEGG':['C00004','C30184']},
+    },
+    'Xf5dc8599a48d0111a3a5f618296752e1b53c8d30':{
+    'Names':['NAD','NADX','DPN'],
+    'DB_links':{'KEGG':['C00004','C30184']},
+    }
     }
 
     G.add_node(1,type='c',\
@@ -848,6 +884,11 @@ def test_update_start_compounds():
     G.add_node(6,type='pf',mid='R1')
     G.add_node(7,type='rr',mid='R1')
     G.add_node(8,type='pr',mid='R1')
+    G.add_node(11,type='c',mid='C00004',start=False)
+    G.add_node(12,type='c',\
+    mid='Cf5dc8599a48d0111a3a5f618296752e1b53c8d30',start=False)
+    G.add_node(13,type='c',\
+    mid='Xf5dc8599a48d0111a3a5f618296752e1b53c8d30',start=False)
 
     G.add_path([1,5,6,2])
 
@@ -881,6 +922,35 @@ def test_update_start_compounds():
 
     update_start_compounds(G, \
     ['C67559', 'C67560', 'C2ae5f6786e5a8f65a865e865f68a5e68f5a86e8a', 'Twin'])
+
+    assert G.nodes(data=True) == H.nodes(data=True)
+    assert nx.is_isomorphic(G, H)
+
+    for n in [1,2,3,4,11,12,13]:
+        G.node[n]['start'] = False
+
+    for n in [1,2,3,4]:
+        H.node[n]['start'] = False
+    for n in [11,12,13]:
+        H.node[n]['start'] = True
+
+    update_start_compounds(G, ['NAD'])
+
+    assert G.nodes(data=True) == H.nodes(data=True)
+    assert nx.is_isomorphic(G, H)
+
+    for n in [1,2,3,4,11,12,13]:
+        G.node[n]['start'] = False
+
+    update_start_compounds(G, ['C00004','FAKE'])
+
+    assert G.nodes(data=True) == H.nodes(data=True)
+    assert nx.is_isomorphic(G, H)
+
+    for n in [1,2,3,4,11,12,13]:
+        G.node[n]['start'] = False
+
+    update_start_compounds(G, ['NADX', 'C30184'])
 
     assert G.nodes(data=True) == H.nodes(data=True)
     assert nx.is_isomorphic(G, H)
