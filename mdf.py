@@ -509,7 +509,7 @@ def multi_mdf(S, all_drGs, constraints, ratio_constraints=None, net_rxns=[],
         use for ratio ranges (linear or logarithmic).
     net_rxns : list of strings
         List with strings referring to the background network reactions for
-        network-embedded MDF analysis (NE-MDF). The reactions should be in S.
+        network-embedded MDF analysis (NEM). The reactions should be in S.
     all_directions : bool, optional
         Set to True to calculate MDF for all possible reaction direction
         combinations. Not recommended for sets of reactions >20.
@@ -744,11 +744,10 @@ def main(reaction_file, std_drG_file, outfile_name, cons_file, ratio_cons_file,
     else:
         ratio_constraints = None
     if pw_rxn_file:
-        sWrite("Reading pathway reactions for NE-MDF...")
+        sWrite("Reading pathway reactions for NEM...")
         pw_rxns = list(filter(None,
                        [x.strip() for x in open(pw_rxn_file, 'r').readlines()]))
-        # Create list of network reactions rather than pathway reactions
-        # for NE-MDF
+        # Create list of network reactions rather than pathway reactions for NEM
         net_rxns = list(set(S.columns) - set(pw_rxns))
         sWrite(" Done.\n")
     else:
@@ -789,7 +788,7 @@ if __name__ == "__main__":
         )
     parser.add_argument(
         '--pathway', type=str,
-        help='Specify pathway reactions for NE-MDF.'
+        help='Specify pathway reactions for NEM.'
         )
     parser.add_argument(
         '--all_directions', action='store_true',

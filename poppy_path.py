@@ -1347,7 +1347,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--model', type=str,
-        help='Read model reaction network for NE-MDF.'
+        help='Read model reaction network for NEM.'
     )
     parser.add_argument(
         '--pH', type=float, default=7.0,

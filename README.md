@@ -66,16 +66,16 @@ free energy changes.
 
 ---
 
-### 5. Standalone MDF and NE-MDF analysis
+### 5. Standalone MDF and NEM analysis
 
 `mdf.py` performs Max-min Driving Force (MDF; [Noor _et al._, 2014](http://doi.org/10.1371/journal.pcbi.1003483)) and Network-Embedded
-MDF (NE-MDF) analysis.
+MDF (NEM) analysis.
 
-##### _Example: Perform NE-MDF analysis on lysine biosynthesis in_ E. coli _and_ Synechocystis
+##### _Example: Perform NEM analysis on lysine biosynthesis in_ E. coli _and_ Synechocystis
 
-`./mdf.py --min_conc 0.0000001 --max_conc 0.1 --constraints examples/E_coli.concentrations.tab --ratios examples/E_coli.Lys_opt_ratios.tab --pathway examples/E_coli.Lys_pathway.txt examples/E_coli.model.tab E_coli.model_drgs.tab E_coli_Lys_ne-mdf.csv`
+`./mdf.py --min_conc 0.0000001 --max_conc 0.1 --constraints examples/E_coli.concentrations.tab --ratios examples/E_coli.Lys_opt_ratios.tab --pathway examples/E_coli.Lys_pathway.txt examples/E_coli.model.tab E_coli.model_drgs.tab E_coli_Lys_nem.csv`
 
-`./mdf.py --min_conc 0.0000001 --max_conc 0.1 --constraints examples/Synechocystis.concentrations.tab --ratios examples/Synechocystis.Lys_opt_ratios.tab --pathway examples/Synechocystis.Lys_pathway.txt examples/Synechocystis.model.tab Synechocystis.model_drgs.tab Synechocystis_Lys_ne-mdf.csv`
+`./mdf.py --min_conc 0.0000001 --max_conc 0.1 --constraints examples/Synechocystis.concentrations.tab --ratios examples/Synechocystis.Lys_opt_ratios.tab --pathway examples/Synechocystis.Lys_pathway.txt examples/Synechocystis.model.tab Synechocystis.model_drgs.tab Synechocystis_Lys_nem.csv`
 
 ---
 
