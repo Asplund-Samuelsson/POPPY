@@ -53,7 +53,7 @@ class Progress():
 
         # Initialize variables
         self.update(val, max_val, design)
-        self.__speed_samples = self.__deque(maxlen=10)
+        self.__speed_samples = list()
 
     def __call__(self, val = None):
         """Calling returns a string of the current progress"""
