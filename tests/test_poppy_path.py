@@ -1035,8 +1035,8 @@ def test_format_mdf_summary():
     # Set up testing "network"
     network = nx.DiGraph()
     network.graph['mine_data'] = {
-        'R1':{'Reactants':[[1,'A']],'Products':[[2,'B']]},
-        'R2':{'Reactants':[[1,'B']],'Products':[[1,'C']]},
+        'R2':{'Reactants':[[1,'A']],'Products':[[2,'B']]},
+        'R1':{'Reactants':[[1,'B']],'Products':[[1,'C']]},
         'R3':{'Reactants':[[1,'C']],'Products':[[2,'D']]},
         'R4':{'Reactants':[[2,'B']],'Products':[[1,'D'],[1,'E']]},
         'R5':{'Reactants':[[1,'D']],'Products':[[1,'B']]},
@@ -1045,20 +1045,20 @@ def test_format_mdf_summary():
 
     # Set up testing pathways in text format
     pw_1 = "\n".join([
-        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
         'R2' + "\t" + format_reaction_text(network.graph['mine_data']['R2']),
+        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
         'R3' + "\t" + format_reaction_text(network.graph['mine_data']['R3'])
     ])
     pw_2 = "\n".join([
-        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R2' + "\t" + format_reaction_text(network.graph['mine_data']['R2']),
         'R4' + "\t" + format_reaction_text(network.graph['mine_data']['R4'])
     ])
     pw_3 = "\n".join([
-        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R2' + "\t" + format_reaction_text(network.graph['mine_data']['R2']),
         'R5' + "\t" + format_reaction_text(network.graph['mine_data']['R5'], 1)
     ])
     pw_4 = "\n".join([
-        'R1' + "\t" + format_reaction_text(network.graph['mine_data']['R1']),
+        'R2' + "\t" + format_reaction_text(network.graph['mine_data']['R2']),
         'R6' + "\t" + format_reaction_text(network.graph['mine_data']['R6'], 1)
     ])
 
@@ -1069,10 +1069,10 @@ def test_format_mdf_summary():
     exp_summary_txt = "\n".join([
         "\t".join(x) for x in [
             ['pathway', 'MDF', 'length', 'reactions'],
-            ['47afbbd9e7', '5.001', '2', 'R1,R4'],
-            ['8d415da2b3', '5.001', '3', 'R1,R2,R3'],
-            ['a3943b79d8', '4.300', '2', 'R1,-R5'],
-            ['560b193f2a', 'NA', '2', 'R1,-R6']]
+            ['R2,R4', '5.001', '2', 'R2,R4'],
+            ['R1,R2,R3', '5.001', '3', 'R2,R1,R3'],
+            ['-R5,R2', '4.300', '2', 'R2,-R5'],
+            ['-R6,R2', 'NA', '2', 'R2,-R6']]
     ]) + "\n"
 
     assert exp_summary_txt == format_mdf_summary(mdf_dict, network)[1]
@@ -1183,7 +1183,7 @@ def test_format_pathway_html():
         '',
         '<hr>',
         '',
-        '<h5>Pathway "47afbbd9e7": 5.001 kJ/mol, 2 reactions</h5>',
+        '<h5>Pathway "R1,R4": 5.001 kJ/mol, 2 reactions</h5>',
         '',
         '<table border=0>',
         '<tr>',
@@ -1227,7 +1227,7 @@ def test_format_pathway_html():
         '',
         '<hr>',
         '',
-        '<h5>Pathway "8d415da2b3": 5.001 kJ/mol, 3 reactions</h5>',
+        '<h5>Pathway "R1,R2,R3": 5.001 kJ/mol, 3 reactions</h5>',
         '',
         '<table border=0>',
         '<tr>',
@@ -1284,7 +1284,7 @@ def test_format_pathway_html():
         '',
         '<hr>',
         '',
-        '<h5>Pathway "a3943b79d8": 4.300 kJ/mol, 2 reactions</h5>',
+        '<h5>Pathway "-R5,R1": 4.300 kJ/mol, 2 reactions</h5>',
         '',
         '<table border=0>',
         '<tr>',
@@ -1324,7 +1324,7 @@ def test_format_pathway_html():
         '',
         '<hr>',
         '',
-        '<h5>Pathway "560b193f2a": MDF FAILED, 2 reactions</h5>',
+        '<h5>Pathway "-RM6,R1": MDF FAILED, 2 reactions</h5>',
         '',
         '<table border=0>',
         '<tr>',

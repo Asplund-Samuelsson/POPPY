@@ -766,7 +766,7 @@ def format_pathway_text(network, pathways, target_node, pw_sep=True):
 def format_mdf_summary(mdf_dict, network):
 
     # Set up column series
-    pw_hash = []
+    pw_ordr = []
     pw_nrxn = []
     pw_mdfs = []
     pw_rxns = []
@@ -774,9 +774,6 @@ def format_mdf_summary(mdf_dict, network):
 
     # Iterate over pathways in the MDF dictionary
     for pw_txt in mdf_dict:
-
-        # Append hash
-        pw_hash.append(rank.generate_pathway_hash(pw_txt))
 
         # Append number of reactions
         pw_nrxn.append(len(set([
@@ -805,9 +802,12 @@ def format_mdf_summary(mdf_dict, network):
         # Append pathway text
         pw_txts.append(pw_txt)
 
+        # Append ordered pathway reactions
+        pw_ordr.append(",".join(sorted(rxn_ids)))
+
     # Construct dataframe
     pw_df = pd.DataFrame({
-        'pathway'   : pw_hash,
+        'pathway'   : pw_ordr,
         'length'    : pw_nrxn,
         'MDF'       : pw_mdfs,
         'reactions' : pw_rxns,
