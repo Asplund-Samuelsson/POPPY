@@ -733,9 +733,25 @@ def format_reaction_text(reaction, reverse=False):
 def format_pathway_text(network, pathways, target_node, pw_sep=True):
     """Create pathways record in text format"""
     pathway_lines = []
+    added_pathways = set()
 
     # Go through pathways in length order
     for pathway in sorted(list(pathways), key=len):
+
+        # Create pathway reaction set
+        pathway_set = set()
+        for n in pathway:
+            n_type = network.node[n]['type']
+            if n_type != 'c':
+                n_id = network.node[n]['mid']
+                pathway_set.add(n_type + "_" + n_id)
+        pathway_set = frozenset(pathway_set)
+
+        # Check that the pathway has not been added before (in different order)
+        if pathway_set in added_pathways:
+            continue
+        else:
+            added_pathways.add(pathway_set)
 
         # Create a subnetwork
         subnet = network.subgraph(pathway)
