@@ -537,9 +537,21 @@ def paths_to_pathways(network, paths, target_node, rxn_lim=10, shallow=False):
         # Cycles are 1) wasteful and 2) indicate bootstrap compounds
         if has_cycles(pathnet, network):
             continue
-        #if not nx.is_directed_acyclic_graph(pathnet):
-        #    continue
 
+        # Discard the pathway if it contains multiple instances of one reaction
+        # This will remove pathways with forward and reverse of one reaction
+        has_duplicated_reaction = False
+        reactions = []
+        for n in pathnet.nodes():
+            if pathnet.node[n]['type'] in {'rf','rr'}:
+                reaction_id = pathnet.node[n]['mid']
+                if reaction_id in reactions:
+                    has_duplicated_reaction = True
+                else:
+                    reactions.append(reaction_id)
+
+        if has_duplicated_reaction:
+            continue
 
         # Check the number of reactions
         n_rxn = count_reactions(pathnet)
