@@ -311,6 +311,9 @@ def test_getcomp():
     res = getcomp(con, db, 'Cc93137cc81324a5b2872b0bf1c77866c234d66e1')
     assert res['dG_error'] == 1.02079
 
+    res = getcomp(con, db, 'X71306b6c4efe11bc7c485fbc71932f3deb14fa2c')
+    assert res['DB_links']['KEGG'] == 'C00080'
+
     assert getcomp(con, db, 'not_a_comp_id') == None
 
 

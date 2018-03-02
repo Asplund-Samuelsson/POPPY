@@ -335,6 +335,13 @@ def getcomp(con, db, comp_id):
     if results == None:
         s_err("Warning: '" + comp_id + \
         "' could not be retrieved from the database.\n")
+    # Fix missing proton KEGG ID
+    if comp_id == "X71306b6c4efe11bc7c485fbc71932f3deb14fa2c":
+        try:
+            results['DB_links']['KEGG'] = ['C00080']
+        except KeyError:
+            results['DB_links'] = {'KEGG':['C00080']}
+    # Return compound record
     return results
 
 
