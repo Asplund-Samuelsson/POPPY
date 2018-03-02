@@ -317,7 +317,9 @@ def subnetwork_from_paths(network, paths, target_node):
         remove_incomplete_reactions(subnet)
         # Reduce to the connected component
         try:
-            subnet = subnet.subgraph(digraph_connected_component(subnet, target_node))
+            subnet = subnet\
+            .subgraph(digraph_connected_component(subnet, target_node)\
+            .union(start_comp_nodes))
         except KeyError:
             sys.exit("\nError: Subnetwork cannot generate target compound.\n")
         n_removed = n_before - len(subnet)

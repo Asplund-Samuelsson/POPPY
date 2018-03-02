@@ -384,13 +384,13 @@ def test_subnetwork_from_paths():
     paths = generate_paths(G, 22, 4, n_procs=4)
     subnet = subnetwork_from_paths(G, paths, 22)
 
-    assert len(subnet.nodes()) == 33
+    assert len(subnet.nodes()) == 34
     assert len(subnet.edges()) == 36
     assert set(subnet.nodes()) == set([
         2,3,4,7,8,12,13,14,101,
         102,9,20,21,22,56,55,
         47,54,53,46,45,39,38,
-        1,37,42,52,
+        1,32,37,42,52,
         44,43,48,49,40,41
     ])
 
