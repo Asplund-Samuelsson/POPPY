@@ -7,6 +7,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), os.pardir))
 # Import the script to be tested
 from poppy_create import *
 
+# Specify server URL
+global server_url
+server_url = "http://modelseed.org/services/mine-database"
+
 # Define tests
 def test_allow_reaction_listing():
     # C1 is not a cofactor
@@ -275,7 +279,6 @@ def test_get_raw_KEGG_3():
 def test_quicksearch():
 
     # Set up connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
@@ -285,7 +288,6 @@ def test_quicksearch():
 
 def test_threaded_quicksearch():
     # Set up connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
@@ -301,7 +303,6 @@ def test_threaded_quicksearch():
 
 def test_getcomp():
     # Set up connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
@@ -312,14 +313,13 @@ def test_getcomp():
     assert res['dG_error'] == 1.02079
 
     res = getcomp(con, db, 'X71306b6c4efe11bc7c485fbc71932f3deb14fa2c')
-    assert res['DB_links']['KEGG'] == 'C00080'
+    assert res['DB_links']['KEGG'] == ['C00080']
 
     assert getcomp(con, db, 'not_a_comp_id') == None
 
 
 def test_threaded_getcomps():
     # Set up connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
@@ -348,7 +348,6 @@ def test_threaded_getcomps():
 def test_getrxn():
 
     # Set up connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
@@ -364,7 +363,6 @@ def test_getrxn():
 
 def test_threaded_getrxn():
     # Set up connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
@@ -429,7 +427,6 @@ def test_KEGG_to_MINE_id():
 
 def test_extract_reaction_comp_ids(capsys):
     # Set up connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
@@ -457,7 +454,6 @@ def test_extract_reaction_comp_ids(capsys):
 
 def test_limit_carbon():
     # Set up connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
@@ -503,7 +499,6 @@ def test_extract_comp_reaction_ids():
 
 def test_get_raw_MINE():
 
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     db = "KEGGexp2"
     con = mc.mineDatabaseServices(server_url)
 
@@ -544,6 +539,7 @@ def test_get_raw_MINE():
 
     rxns = con.get_rxns(db, rxn_id_list)
     comp_dict = dict([(comp['_id'], comp) for comp in comps])
+    comp_dict['X71306b6c4efe11bc7c485fbc71932f3deb14fa2c']['DB_links']['KEGG'] = ['C00080']
     rxn_dict = dict([(rxn['_id'], rxn) for rxn in rxns])
 
     compound_ids = [
@@ -587,7 +583,6 @@ def test_get_raw_MINE():
 
 
 def test_add_compound_node():
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     db = "KEGGexp2"
     con = mc.mineDatabaseServices(server_url)
 
@@ -660,7 +655,6 @@ def test_check_connection(capsys):
 
 
 def test_add_quad_reaction_node(capsys):
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     db = "KEGGexp2"
     con = mc.mineDatabaseServices(server_url)
 
@@ -1714,7 +1708,6 @@ def test_enhance_KEGG_with_MINE():
     # EQUATION    C02804 <=> C06142 + C00011
 
     # Set up MINE connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 

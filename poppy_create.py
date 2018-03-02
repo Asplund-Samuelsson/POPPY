@@ -509,7 +509,7 @@ def read_compounds(filename):
 def KEGG_to_MINE_id(kegg_ids):
     """Translate KEGG IDs to MINE IDs."""
     s_out("\nTranslating from KEGG IDs to MINE IDs...\n")
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    server_url = "http://modelseed.org/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
     kegg_id_dict = {}
@@ -615,7 +615,7 @@ def get_raw_MINE(comp_id_list, step_limit=10, comp_limit=100000, C_limit=25):
     """Download connected reactions and compounds up to the limits."""
 
     # Set up connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    server_url = "http://modelseed.org/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
@@ -1673,7 +1673,7 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
     print("\nEnhancing KEGG reaction network data with MINE reactions...\n")
 
     # Set up MINE connection
-    server_url = "http://bio-data-1.mcs.anl.gov/services/mine-database"
+    server_url = "http://modelseed.org/services/mine-database"
     con = mc.mineDatabaseServices(server_url)
     db = "KEGGexp2"
 
