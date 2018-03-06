@@ -315,6 +315,9 @@ def test_getcomp():
     res = getcomp(con, db, 'X71306b6c4efe11bc7c485fbc71932f3deb14fa2c')
     assert res['DB_links']['KEGG'] == ['C00080']
 
+    res = getcomp(con, db, 'X08a914cde05039694ef0194d9ee79ff9a79dde33')
+    assert res['DB_links']['KEGG'] == ['C00001']
+
     assert getcomp(con, db, 'not_a_comp_id') == None
 
 
@@ -540,6 +543,7 @@ def test_get_raw_MINE():
     rxns = con.get_rxns(db, rxn_id_list)
     comp_dict = dict([(comp['_id'], comp) for comp in comps])
     comp_dict['X71306b6c4efe11bc7c485fbc71932f3deb14fa2c']['DB_links']['KEGG'] = ['C00080']
+    comp_dict['X08a914cde05039694ef0194d9ee79ff9a79dde33']['DB_links']['KEGG'] = ['C00001']
     rxn_dict = dict([(rxn['_id'], rxn) for rxn in rxns])
 
     compound_ids = [
