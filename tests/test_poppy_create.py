@@ -1977,3 +1977,120 @@ def test_is_balanced():
     assert  is_balanced(rxn_3, comp_dict)
     assert  not is_balanced(rxn_4, comp_dict)
     assert  not is_balanced(rxn_5, comp_dict)
+
+
+def test_add_ferredoxin():
+    # Before adding ferredoxin to 1.14.15.a operator reactions
+    cpd_dict = {"C00003":{'_id':"C00003", 'DB_links':{'KEGG':['C00007']}}}
+    rxn_dict = {
+        "R1":{
+            "_id":"R1","Reactants":[[1,"C00003"]],
+            "Products":[[1,"X1"]],"Operators":['1.14.15.a']
+            },
+        "R2":{
+            "_id":"R2","Reactants":[[1,"C00003"],[1,"C100"]],
+            "Products":[[1,"C101"],[2,"C00004"]],"Operators":['2.14.15.a']
+            },
+        "R3":{
+            "_id":"R3","Reactants":[[1,"C2"]],
+            "Products":[[1,"X2"]],"Operators":['M:1.14.15.a']
+            },
+        "R4":{
+            "_id":"R3","Reactants":[[1,"Z2"]],
+            "Products":[[1,"C2"]],"Operators":['1.16.5.b']
+            },
+        "R5":{
+            "_id":"R5","Reactants":[[1,"C3"],[1,"Z9"]],
+            "Products":[[1,"C4"]],"Operators":['3.14.15.a']
+            },
+        "R6":{
+            "_id":"R6","Reactants":[[1,"C9"]],
+            "Products":[[1,"C8"],[1,"C3"]],"Operators":['1.14.15.a']
+            },
+        "R7":{
+            "_id":"R7","Reactants":[[1,"X4"]],
+            "Products":[[1,"Z4"]],"Operators":['1.1.1.3']
+            },
+        "R8":{
+            "_id":"R8","Reactants":[[1,"X4"]],
+            "Products":[[1,"Z4"]]
+            }
+    }
+
+    # Create before-addition lists as well
+    cpd_list = deepcopy(list(cpd_dict.values()))
+    rxn_list = deepcopy(list(rxn_dict.values()))
+
+    # Expected reaction dictionary
+    id_fd_re = "Xfedfedfedfedfedfedfedfedfedfedfedfedfed1"
+    id_fd_ox = "Xfedfedfedfedfedfedfedfedfedfedfedfedfed0"
+    exp_cpd_dict = {
+        "C00003":{'_id':"C00003", 'DB_links':{'KEGG':['C00007']}},
+        id_fd_re:{
+            '_id':id_fd_re,
+            'DB_links':{'KEGG':['C00138']},
+            'Names':['Fd(red)', 'Reduced ferredoxin'],
+            'Product_of':[], 'Reactant_in':[]
+            },
+        id_fd_ox:{
+            '_id':id_fd_ox,
+            'DB_links':{'KEGG':['C00139']},
+            'Names':['Fd(ox)', 'Oxidized ferredoxin'],
+            'Product_of':[], 'Reactant_in':[]
+            }
+        }
+    exp_rxn_dict = {
+        "R1":{
+            "_id":"R1","Reactants":[[1,"C00003"],[2,id_fd_re]],
+            "Products":[[1,"X1"],[2,id_fd_ox]],"Operators":['1.14.15.a']
+            },
+        "R2":{
+            "_id":"R2","Reactants":[[1,"C00003"],[1,"C100"]],
+            "Products":[[1,"C101"],[2,"C00004"]],"Operators":['2.14.15.a']
+            },
+        "R3":{
+            "_id":"R3","Reactants":[[1,"C2"],[2,id_fd_re]],
+            "Products":[[1,"X2"],[2,id_fd_ox]],"Operators":['M:1.14.15.a']
+            },
+        "R4":{
+            "_id":"R3","Reactants":[[1,"Z2"]],
+            "Products":[[1,"C2"]],"Operators":['1.16.5.b']
+            },
+        "R5":{
+            "_id":"R5","Reactants":[[1,"C3"],[1,"Z9"]],
+            "Products":[[1,"C4"]],"Operators":['3.14.15.a']
+            },
+        "R6":{
+            "_id":"R6","Reactants":[[1,"C9"],[2,id_fd_re]],
+            "Products":[[1,"C8"],[1,"C3"],[2,id_fd_ox]],"Operators":['1.14.15.a']
+            },
+        "R7":{
+            "_id":"R7","Reactants":[[1,"X4"]],
+            "Products":[[1,"Z4"]],"Operators":['1.1.1.3']
+            },
+        "R8":{
+            "_id":"R8","Reactants":[[1,"X4"]],
+            "Products":[[1,"Z4"]]
+            }
+    }
+
+    # Create expected lists
+    exp_cpd_list = list(exp_cpd_dict.values())
+    exp_rxn_list = list(exp_rxn_dict.values())
+
+    add_ferredoxin(rxn_dict, cpd_dict)
+    add_ferredoxin(rxn_list, cpd_list)
+
+    assert cpd_dict == exp_cpd_dict
+
+    assert rxn_dict == exp_rxn_dict
+
+    for cpd in cpd_list:
+        assert cpd in exp_cpd_list
+    for cpd in exp_cpd_list:
+        assert cpd in cpd_list
+
+    for rxn in rxn_list:
+        assert rxn in exp_rxn_list
+    for rxn in exp_rxn_list:
+        assert rxn in rxn_list

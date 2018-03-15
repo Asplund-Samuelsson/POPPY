@@ -1727,6 +1727,9 @@ def enhance_KEGG_with_MINE(KEGG_comp_dict, KEGG_rxn_dict):
     s_out("\nDownloading MINE cofactors...\n")
     MINE_comps = MINE_comps + threaded_getcomps(con, db, list(MINE_X_comp_ids))
 
+    # Add ferredoxin
+    add_ferredoxin(MINE_rxns, MINE_comps)
+
     # Create a SMILES to KEGG dictionary from the KEGG compound dictionary
     s_out("\nSetting up SMILES to KEGG translation...")
     SMILES_to_KEGG = create_SMILES_to_KEGG_dict(KEGG_comp_dict)
@@ -2003,6 +2006,56 @@ def is_balanced(reaction, comp_dict):
     return reactant_elements == product_elements
 
 
+def add_ferredoxin(rxns, cpds):
+    """Balances 1.14.15.a reactions with ferredoxin"""
+    id_fd_re = "Xfedfedfedfedfedfedfedfedfedfedfedfedfed1"
+    id_fd_ox = "Xfedfedfedfedfedfedfedfedfedfedfedfedfed0"
+    if isinstance(rxns, dict) & isinstance(cpds, dict):
+        for rxn_id in rxns:
+            try:
+                if {'M:1.14.15.a','1.14.15.a'}.intersection(rxns[rxn_id]\
+                ['Operators']):
+                    rxns[rxn_id]['Reactants'].append([2,id_fd_re])
+                    rxns[rxn_id]['Products'].append([2,id_fd_ox])
+            except KeyError:
+                pass
+        cpds[id_fd_re] = {
+                '_id':id_fd_re,
+                'DB_links':{'KEGG':['C00138']},
+                'Names':['Fd(red)', 'Reduced ferredoxin'],
+                'Product_of':[], 'Reactant_in':[]
+                }
+        cpds[id_fd_ox] = {
+                '_id':id_fd_ox,
+                'DB_links':{'KEGG':['C00139']},
+                'Names':['Fd(ox)', 'Oxidized ferredoxin'],
+                'Product_of':[], 'Reactant_in':[]
+                }
+    elif isinstance(rxns, list) & isinstance(cpds, list):
+        for rxn_id in range(0, len(rxns)):
+            try:
+                if {'M:1.14.15.a','1.14.15.a'}.intersection(rxns[rxn_id]\
+                ['Operators']):
+                    rxns[rxn_id]['Reactants'].append([2,id_fd_re])
+                    rxns[rxn_id]['Products'].append([2,id_fd_ox])
+            except KeyError:
+                pass
+        cpds.append({
+                '_id':id_fd_re,
+                'DB_links':{'KEGG':['C00138']},
+                'Names':['Fd(red)', 'Reduced ferredoxin'],
+                'Product_of':[], 'Reactant_in':[]
+                })
+        cpds.append({
+                '_id':id_fd_ox,
+                'DB_links':{'KEGG':['C00139']},
+                'Names':['Fd(ox)', 'Oxidized ferredoxin'],
+                'Product_of':[], 'Reactant_in':[]
+                })
+    else:
+        s_err("Error: Ferredoxin addition attempted on incorrect type(s).\n")
+
+
 # Main code block
 def main(outfile_name, infile, mine, kegg, step_limit,
     comp_limit, C_limit, enhance, eq_filter):
@@ -2039,6 +2092,7 @@ def main(outfile_name, infile, mine, kegg, step_limit,
         raw_mine = get_raw_MINE(start_ids, step_limit, comp_limit, C_limit)
         mine_comp_dict = raw_mine[0]
         mine_rxn_dict = raw_mine[1]
+        add_ferredoxin(mine_rxn_dict, mine_comp_dict)
 
     # Combine KEGG and MINE dictionaries
     mine_comp_dict.update(kegg_comp_dict)
