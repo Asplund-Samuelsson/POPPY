@@ -1,3 +1,5 @@
+### NOTICE TO USERS: Equilibrator query functionality has been disabled due to capacity constraints of that server. Please refrain from using older versions to access Equilibrator. A planned update to POPPY will address this.
+
 ![alt text](poppy.png "Prospecting Optimal Pathways with PYthon")
 
 # Prospecting Optimal Pathways with PYthon
@@ -18,23 +20,9 @@ resources supplied by KEGG ([http://www.kegg.jp/](http://www.kegg.jp/)) and MINE
 
 ---
 
-### 2. Obtain thermodynamic data
+### ~~2. Obtain thermodynamic data~~
 
-`poppy_gibb.py` downloads Equilibrator ([http://equilibrator.weizmann.ac.il/](http://equilibrator.weizmann.ac.il/))
-transformed Gibbs standard formation energy values for specified pHs and stores
-them in a JSON file for use in the thermodynamic analyses.
-
-##### _Example: Obtain formation delta G:s for_ E. coli _and_ Synechocystis _pH:s_
-
-`./poppy_gibb.py 7.6,8.4 dfgs.json`
-
-We modify the JSON file with values for ferredoxin and carboxysomal metabolites:
-
-`perl -pi -e 's/null/19.9/ if /C00138/' dfgs.json`
-
-`perl -pi -e 's/null/-19.9/ if /C00139/' dfgs.json`
-
-`perl -pi -e 'my $I = $_; my $O = $I =~ s/\"\:/_a\"\:/gr; print $O if $I =~ /C00001|C00007|C00011|C00197|C00988|C01182/' dfgs.json`
+Currently disabled.
 
 ---
 

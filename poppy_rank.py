@@ -20,7 +20,6 @@ import mineclient3 as mc
 from poppy_origin_helpers import *
 from poppy_helpers import *
 import mdf
-from equilibrator_query import *
 
 # Define functions
 def generate_pathway_hash(pathway):
@@ -98,7 +97,7 @@ def read_pathways_text(pathways_text):
 
 
 def load_dfG_dict(pathways = None, pH = 7.0, dfG_json = None):
-    """Loads dfG json if provided, otherwise queries equilibrator"""
+    """Loads dfG json."""
 
     if dfG_json:
         # Load the JSON file containing dfG values
@@ -119,7 +118,8 @@ def load_dfG_dict(pathways = None, pH = 7.0, dfG_json = None):
     queries = list(zip(compounds, [pH]*len(compounds)))
 
     # Perform equilibrator query
-    equilibrator_results = threaded_equilibrator_gibbf(queries)
+    # equilibrator_results = threaded_equilibrator_gibbf(queries)
+    sys.exit("Error: Equilibrator Gibbs energy functionality disabled.")
 
     # Format dfG dictionary
     dfG_dict = {}
