@@ -1,4 +1,4 @@
-### [!] NOTICE TO USERS: POPPY now (v0.1.3-alpha) uses the offline Equlibrator-API to obtain thermodynamic data. Please refrain from using older versions to access Equilibrator due to capacity constraints of that server.
+### [!] NOTICE TO USERS: POPPY now (v0.1.3-alpha) uses the offline Equilibrator-API to obtain thermodynamic data. Please refrain from using older versions to access Equilibrator due to capacity constraints of that server.
 
 ![alt text](poppy.png "Prospecting Optimal Pathways with PYthon")
 
