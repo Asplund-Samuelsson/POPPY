@@ -73,6 +73,9 @@ MDF (NEM) analysis.
 - Python NetworkX ([https://github.com/networkx/networkx](https://github.com/networkx/networkx))
 - Python RDKit ([https://github.com/rdkit/rdkit](https://github.com/rdkit/rdkit))
 - Python MINE-API ([https://github.com/JamesJeffryes/MINE-API](https://github.com/JamesJeffryes/MINE-API); included as `mineclient3.py`)
+- Python tablib
+- Python PuLP
+- eQuilibrator-API ([https://gitlab.com/elad.noor/equilibrator-api](https://gitlab.com/elad.noor/equilibrator-api))
 - R ≥ 3.0 with ggplot2 and RColorBrewer
 
 ---

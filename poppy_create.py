@@ -22,7 +22,6 @@ from poppy_helpers import *
 from poppy_origin_helpers import *
 from poppy_KEGG_helpers import *
 from progress import Progress
-from equilibrator_query import *
 
 # Specify path to repository
 global repo_dir

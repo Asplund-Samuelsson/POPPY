@@ -16,6 +16,7 @@ import pandas as pd
 import gzip
 from itertools import product
 from shutil import copyfile
+from equilibrator_api import ComponentContribution, Reaction, ReactionMatcher
 
 # Import scripts
 from progress import Progress
@@ -1199,7 +1200,7 @@ def main(infile_name, compound, ban_reac_file, ban_prod_file,
             # Perform MDF
             mdf_dict = rank.pathways_to_mdf(
                 pw_rank, dfG_dict, ne_con, eq_con, n_procs, T, R, net_text,
-                c_max, c_min
+                c_max, c_min, pH
             )
 
             # Create output directory structure
@@ -1372,7 +1373,7 @@ if __name__ == "__main__":
         help='Read metabolite concentration ratios (equality constraints).'
     )
     parser.add_argument(
-        '--gibbs', type=str,
+        '--gibbs', type=str, default=None,
         help='Read transformed Gibbs standard formation energies (JSON).'
     )
     parser.add_argument(

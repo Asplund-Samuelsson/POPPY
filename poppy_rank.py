@@ -13,6 +13,7 @@ from decimal import Decimal
 import json
 import hashlib
 import pandas as pd
+from equilibrator_api import ComponentContribution, Reaction, ReactionMatcher
 
 # Import scripts
 from progress import Progress
@@ -58,16 +59,25 @@ def parse_equation(equation):
     return (stoichiometry_parse(reactants), stoichiometry_parse(products))
 
 
-def reaction_gibbs(equation, dfG_dict):
+def reaction_gibbs(equation, dfG_dict = None, pH = 7.0):
     """Calculate standard Gibbs reaction energy."""
-    s = parse_equation(equation)
-    if None in [dfG_dict[c[1]] for c in s[0] + s[1]]:
-        # Cannot calculate drG when dfG is missing
-        return None
+    # Remove compartment tags from compound IDs
+    equation = re.sub("_\[[a-z]{3}\]", "", equation)
+    equation = re.sub("_[a-z]{1}", "", equation)
+    if dfG_dict:
+        s = parse_equation(equation)
+        if None in [dfG_dict[c[1]] for c in s[0] + s[1]]:
+            # Cannot calculate drG when dfG is missing
+            return None
+        else:
+            p = sum([c[0]*Decimal(str(dfG_dict[c[1]])) for c in s[1]])
+            r = sum([c[0]*Decimal(str(dfG_dict[c[1]])) for c in s[0]])
+            return float(p - r)
     else:
-        p = sum([c[0]*Decimal(str(dfG_dict[c[1]])) for c in s[1]])
-        r = sum([c[0]*Decimal(str(dfG_dict[c[1]])) for c in s[0]])
-        return float(p - r)
+        # Use Equilibrator API
+        eq_api = ComponentContribution(pH=pH, ionic_strength=0.1)
+        rxn = Reaction.parse_formula(equation)
+        return round(eq_api.dG0_prime(rxn)[0], 1)
 
 
 def read_pathways_text(pathways_text):
@@ -105,44 +115,22 @@ def load_dfG_dict(pathways = None, pH = 7.0, dfG_json = None):
             return json.load(open(dfG_json, 'r'))[str(pH)]
         except KeyError:
             pass
-
-    # Identify all compounds in the pathways
-    compounds = set()
-    for pathway in pathways:
-        for reaction in pathway.split("\n"):
-            for side in parse_equation(reaction.rstrip().split("\t")[1]):
-                for element in side:
-                    compounds.add(element[1])
-
-    # Set up equilibrator queries
-    queries = list(zip(compounds, [pH]*len(compounds)))
-
-    # Perform equilibrator query
-    # equilibrator_results = threaded_equilibrator_gibbf(queries)
-    sys.exit("Error: Equilibrator Gibbs energy functionality disabled.")
-
-    # Format dfG dictionary
-    dfG_dict = {}
-    for query in queries:
-        dfG_dict[query[0]] = equilibrator_results[query][0]
-
-    # Return finished dictionary
-    return dfG_dict
+        return dfG_dict
+    else:
+        return None
 
 
-def drGs_for_pathway(pathway, dfG_dict):
+def drGs_for_pathway(pathway, dfG_dict, pH=7.0):
     drGs = {}
     for reaction in pathway.split("\n"):
         r_id = reaction.split("\t")[0]
         r_eq = reaction.split("\t")[1]
-        # Remove compartment tags from compound IDs
-        r_eq = re.sub("_\[[a-z]{3}\]", "", r_eq)
-        drGs[r_id] = reaction_gibbs(r_eq, dfG_dict)
+        drGs[r_id] = reaction_gibbs(r_eq, dfG_dict, pH)
     return drGs
 
 
 def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
-    T=298.15, R=8.31e-3, network_text="", x_max=0.1, x_min=0.0000001):
+    T=298.15, R=8.31e-3, network_text="", x_max=0.1, x_min=0.0000001, pH=7.0):
     """Create a dictionary with pathways and their MDF values"""
 
     # The cytosol is selected as the default compartment
@@ -167,7 +155,7 @@ def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
                     pathway_and_network = pathway.strip() + "\n" + network_text.strip()
                 else:
                     pathway_and_network = pathway
-                drGs_d = drGs_for_pathway(pathway_and_network, dfGs)
+                drGs_d = drGs_for_pathway(pathway_and_network, dfGs, pH)
                 drGs_t = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_d.items()])
                 drGs = mdf.read_reaction_drGs(drGs_t)
 
@@ -343,7 +331,7 @@ def main(pathway_file, outfile, dfG_json, pH, ne_con_file, eq_con_file,
 
     # Perform MDF
     mdf_dict = pathways_to_mdf(
-        pathways, dfG_dict, ne_con, eq_con, n_procs, T, R
+        pathways, dfG_dict, ne_con, eq_con, n_procs, T, R, pH=pH
     )
 
     # Format output
@@ -359,7 +347,7 @@ if __name__ == "__main__":
     # Read arguments from the commandline
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '-g', '--gibbs', type=str,
+        '-g', '--gibbs', type=str, default=None,
         help='Read transformed Gibbs standard formation energies (JSON).'
     )
     parser.add_argument(
@@ -410,7 +398,7 @@ if __name__ == "__main__":
         dfGs = load_dfG_dict(pathways, args.pH, args.gibbs)
 
         # Calculate reaction delta Gs
-        drGs_d = drGs_for_pathway(pathways[0], dfGs)
+        drGs_d = drGs_for_pathway(pathways[0], dfGs, args.pH)
         drGs_t = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_d.items()])
 
         # Write to outfile

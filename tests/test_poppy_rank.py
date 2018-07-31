@@ -49,6 +49,7 @@ def test_parse_equation():
 
 
 def test_reaction_gibbs():
+    # Test for supplied data
     equation = "(S)-Malate <=> Fumarate + H2O"
     dfG_dict = {"(S)-Malate":10, "Fumarate":20, "H2O":-10}
     assert reaction_gibbs(equation, dfG_dict) == 0
@@ -62,7 +63,13 @@ def test_reaction_gibbs():
         }
     assert reaction_gibbs(equation, dfG_dict) == -28.3
     assert reaction_gibbs("A <=> B", {"A":None,"B":1.2}) == None
-
+    # Test for Equilibrator data
+    equation = "C01182_a + C00007_a = C00197_a + C00988_a"
+    assert reaction_gibbs(equation, pH=8.4) == -520.1
+    equation = "C04411 + C00003 = C04236 + C00004"
+    assert reaction_gibbs(equation, pH=8.4) == 12.6
+    equation = "2 C00048 = C01146 + C00011"
+    assert reaction_gibbs(equation, pH=7.0) == -28.1
 
 def test_read_pathways_text():
     p_text = "\n//\n".join([
@@ -139,15 +146,8 @@ def test_load_dfG_dict():
 
     # Check output
     loaded_dfG = load_dfG_dict(pH = 6.5, dfG_json = dfG_json.name)
-    downloaded_dfG = load_dfG_dict(pathways, 6.5)
 
     assert json.load(open(dfG_json.name, 'r'))["6.5"] == exp_data_dfG[6.5]
-    assert loaded_dfG == downloaded_dfG
-
-    d1 = load_dfG_dict(pathways, 7.0)
-
-    assert len(d1) == 18
-
 
 def test_drGs_for_pathway():
     pathway = "\n".join(["R1\tC1 + 2 C2 <=> C3",
@@ -157,6 +157,12 @@ def test_drGs_for_pathway():
     dfG_dict = {"C1":-1, "C2":2, "C3":-2, "C4":5, "C5":-3, "C6":10, "C7":-2}
     exp_drGs = {"R1":-5.0, "R2":7.0, "R3":6.0, "R4":7.0}
     assert drGs_for_pathway(pathway, dfG_dict) == exp_drGs
+    pathway = "\n".join(["R508\tC00158 = C00417 + C00001",
+                         "R5\tC04691 = C00944 + C00009",
+                         "R431C\tC01182_a + C00011_a + C00001_a = 2 C00197_a",
+                         "R47\t2 C00002 + C00064 + C00288 + C00001 = 2 C00008 + C00009 + C00025 + C00169"])
+    exp_drGs = {"R508":8.3, "R5":-130.4, "R431C":-35.7, "R47":-28.0}
+    assert drGs_for_pathway(pathway, None, 8.4) == exp_drGs
 
 
 def test_pathways_to_mdf():
