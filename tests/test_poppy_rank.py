@@ -154,16 +154,36 @@ def test_drGs_for_pathway():
                          "R2\tC3 <=> C4",
                          "R3\tC4 + C5 <=> C6 + C7",
                          "R4\tC2_[cyt] + C3 <=> C2_[ext] + C4"])
-    dfG_dict = {"C1":-1, "C2":2, "C3":-2, "C4":5, "C5":-3, "C6":10, "C7":-2}
+    drG_dict = {
+        "C1 + 2 C2 <=> C3":-5.0, "C3 <=> C4":7.0,
+        "C4 + C5 <=> C6 + C7":6.0, "C2_[cyt] + C3 <=> C2_[ext] + C4":7.0
+    }
     exp_drGs = {"R1":-5.0, "R2":7.0, "R3":6.0, "R4":7.0}
-    assert drGs_for_pathway(pathway, dfG_dict) == exp_drGs
+    assert drGs_for_pathway(pathway, drG_dict) == exp_drGs
     pathway = "\n".join(["R508\tC00158 = C00417 + C00001",
                          "R5\tC04691 = C00944 + C00009",
                          "R431C\tC01182_a + C00011_a + C00001_a = 2 C00197_a",
                          "R47\t2 C00002 + C00064 + C00288 + C00001 = 2 C00008 + C00009 + C00025 + C00169"])
+    drG_dict = {
+        "C00158 = C00417 + C00001":8.3, "C04691 = C00944 + C00009":-130.4,
+        "C01182_a + C00011_a + C00001_a = 2 C00197_a":-35.7,
+        "2 C00002 + C00064 + C00288 + C00001 = 2 C00008 + C00009 + C00025 + C00169":-28.0
+    }
     exp_drGs = {"R508":8.3, "R5":-130.4, "R431C":-35.7, "R47":-28.0}
-    assert drGs_for_pathway(pathway, None, 8.4) == exp_drGs
+    assert drGs_for_pathway(pathway, drG_dict) == exp_drGs
 
+
+def test_create_drG_dict():
+    equations = [
+                    "C03287 + C00005 = C01165 + C00009 + C00006",
+                    "C00111 + C00279 = C00447",
+                    "C00860 + C00003 = C01929 + C00004",
+                    "C00022 + C00010 + C00003 = C00024 + C00011 + C00004",
+                    "C06007 = C00671 + C00001"
+                ]
+    drGs = [-1.6, -12.6, 18.5, -43.3, -35.5]
+    expected_output = dict(zip(equations, drGs))
+    assert create_drG_dict(equations, pH=8.4) == expected_output
 
 def test_pathways_to_mdf():
     pathways = [
@@ -192,7 +212,8 @@ def test_pathways_to_mdf():
     S = mdf.read_reactions(pathways[0])
     A = mdf.mdf_A(S)
     c = mdf.mdf_c(S)
-    drGs_dict = drGs_for_pathway(pathways[0], dfG_dict)
+    equations = [x.split("\t")[1] for x in pathways[0].split("\n")]
+    drGs_dict = drGs_for_pathway(pathways[0], create_drG_dict(equations, dfG_dict))
     drGs_text = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_dict.items()])
     drGs = mdf.read_reaction_drGs(drGs_text)
     b = mdf.mdf_b(S, drGs, ineq_constraints)
@@ -205,7 +226,8 @@ def test_pathways_to_mdf():
     S = mdf.read_reactions(pathways[1])
     A = mdf.mdf_A(S)
     c = mdf.mdf_c(S)
-    drGs_dict = drGs_for_pathway(pathways[1], dfG_dict)
+    equations = [x.split("\t")[1] for x in pathways[1].split("\n")]
+    drGs_dict = drGs_for_pathway(pathways[1], create_drG_dict(equations, dfG_dict))
     drGs_text = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_dict.items()])
     drGs = mdf.read_reaction_drGs(drGs_text)
     b = mdf.mdf_b(S, drGs, ineq_constraints)
@@ -223,6 +245,11 @@ def test_pathways_to_mdf():
 
     assert pathways_to_mdf(
         pathways, dfG_dict, ne_con, eq_con, x_max=0.01, x_min=0.000001
+    ) == pw_mdf_dict
+
+    assert pathways_to_mdf(
+        pathways, dfG_dict, ne_con, eq_con, x_max=0.01, x_min=0.000001,
+        n_procs=1
     ) == pw_mdf_dict
 
     # Pathway 1 with a background network

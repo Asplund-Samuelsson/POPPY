@@ -59,7 +59,7 @@ def parse_equation(equation):
     return (stoichiometry_parse(reactants), stoichiometry_parse(products))
 
 
-def reaction_gibbs(equation, dfG_dict = None, pH = 7.0):
+def reaction_gibbs(equation, dfG_dict = None, pH = 7.0, eq_api=None):
     """Calculate standard Gibbs reaction energy."""
     # Remove compartment tags from compound IDs
     equation = re.sub("_\[[a-z]{3}\]", "", equation)
@@ -75,7 +75,8 @@ def reaction_gibbs(equation, dfG_dict = None, pH = 7.0):
             return float(p - r)
     else:
         # Use Equilibrator API
-        eq_api = ComponentContribution(pH=pH, ionic_strength=0.1)
+        if not eq_api:
+            eq_api = ComponentContribution(pH=pH, ionic_strength=0.1)
         rxn = Reaction.parse_formula(equation)
         return round(eq_api.dG0_prime(rxn)[0], 1)
 
@@ -120,29 +121,41 @@ def load_dfG_dict(pathways = None, pH = 7.0, dfG_json = None):
         return None
 
 
-def drGs_for_pathway(pathway, dfG_dict, pH=7.0):
+def drGs_for_pathway(pathway, drG_dict):
     drGs = {}
     for reaction in pathway.split("\n"):
         r_id = reaction.split("\t")[0]
         r_eq = reaction.split("\t")[1]
-        drGs[r_id] = reaction_gibbs(r_eq, dfG_dict, pH)
+        drGs[r_id] = drG_dict[r_eq]
     return drGs
+
+
+def create_drG_dict(equations, dfG_dict = None, pH=7.0):
+    eq_api = ComponentContribution(pH=pH, ionic_strength=0.1)
+    return dict(zip(
+        equations, [reaction_gibbs(x, dfG_dict, pH, eq_api) for x in equations]
+    ))
 
 
 def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
     T=298.15, R=8.31e-3, network_text="", x_max=0.1, x_min=0.0000001, pH=7.0):
     """Create a dictionary with pathways and their MDF values"""
 
-    # The cytosol is selected as the default compartment
-    # This is where the pathway reactions take place
-    # The "_[cyt]" tag will be removed
-    #network_text = network_text.replace("_[cyt]", "")
+    # Calculate reaction delta G's for all reactions (pathway and network)
+    equations = []
+    for pathway in pathways:
+        equations = equations + \
+        [x.split("\t")[1] for x in filter(None, pathway.split("\n"))]
+    equations = equations + \
+    [x.split("\t")[1] for x in filter(None, network_text.split("\n"))]
+
+    eq_to_drG = create_drG_dict(equations, dfGs, pH)
 
     # Create a stoichiometric matrix of the background network
     S_net = mdf.read_reactions(network_text)
 
     # Define the worker
-    def worker(dfGs, S_net):
+    def worker(eq_to_drG, S_net):
         while True:
             pw_int_chunk = work.get()
             if pw_int_chunk is None:
@@ -155,7 +168,7 @@ def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
                     pathway_and_network = pathway.strip() + "\n" + network_text.strip()
                 else:
                     pathway_and_network = pathway
-                drGs_d = drGs_for_pathway(pathway_and_network, dfGs, pH)
+                drGs_d = drGs_for_pathway(pathway_and_network, eq_to_drG)
                 drGs_t = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_d.items()])
                 drGs = mdf.read_reaction_drGs(drGs_t)
 
@@ -235,7 +248,7 @@ def pathways_to_mdf(pathways, dfGs, ne_con, eq_con, n_procs=4,
         # Start processes
         procs = []
         for i in range(n_procs):
-            p = mp.Process(target=worker, args=(dfGs, S_net))
+            p = mp.Process(target=worker, args=(eq_to_drG, S_net))
             procs.append(p)
             p.start()
 
@@ -397,8 +410,13 @@ if __name__ == "__main__":
         # Load standard formation Gibbs energy dictionary
         dfGs = load_dfG_dict(pathways, args.pH, args.gibbs)
 
+        # Calculate reaction delta G's for all reactions
+        equations = [x.split("\t")[1] for x in filter(None, pathways[0].split("\n"))]
+
+        eq_to_drG = create_drG_dict(equations, dfGs, args.pH)
+
         # Calculate reaction delta Gs
-        drGs_d = drGs_for_pathway(pathways[0], dfGs, args.pH)
+        drGs_d = drGs_for_pathway(pathways[0], eq_to_drG)
         drGs_t = "\n".join(['{}\t{}'.format(k,v) for k,v in drGs_d.items()])
 
         # Write to outfile
