@@ -79,4 +79,5 @@ R ≥ 3.0 with:
 ---
 
 ## Author
-Johannes Asplund-Samuelsson (<johannes.asplund.samuelsson@scilifelab.se>)
+
+Johannes Asplund-Samuelsson (johannes.aspsam@gmail.com)
